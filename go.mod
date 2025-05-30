@@ -1,4 +1,4 @@
-module boj8
+module t8sk
 
 go 1.24.3
 

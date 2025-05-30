@@ -27,7 +27,8 @@ type TaskHandler struct {
 	allowdApiKeys map[string]string
 	logger        *slog.Logger
 
-	hist *prometheus.HistogramVec
+	histTaskDuration *prometheus.HistogramVec
+	counterRejection *prometheus.CounterVec
 }
 
 // keyMap: name -> key
@@ -58,7 +59,8 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) *TaskHa
 		limiter:       rate.NewLimiter(rate.Limit(rateLimit), 1),
 		allowdApiKeys: keys,
 		logger:        logger,
-		hist: promauto.NewHistogramVec(
+
+		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name: "task_duration_seconds",
 				Help: "Duration of task execution",
@@ -68,6 +70,13 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) *TaskHa
 			},
 			[]string{labelApiKeyUsed, labelStatus},
 		),
+		counterRejection: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "task_rejection_total",
+			Help: "Total number of rejected requests",
+			ConstLabels: prometheus.Labels{
+				"handler": name,
+			},
+		}, []string{"reason"}),
 	}
 }
 
@@ -76,11 +85,13 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	apiKeyName := h.allowdApiKeys[token]
 	if apiKeyName == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.counterRejection.WithLabelValues("unauthorized").Inc()
 		return
 	}
 
 	if !h.limiter.Allow() {
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		h.counterRejection.WithLabelValues("limit_exceeded").Inc()
 		return
 	}
 
@@ -102,7 +113,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("failed to run the task", "error", err)
 			status = "failure"
 		}
-		h.hist.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
+		h.histTaskDuration.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
 	} else {
 		err := cmd.Start()
 		if err != nil {
@@ -115,9 +126,8 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					h.logger.Error("failed to wait for task", "error", err)
 					status = "failure"
 				}
-				h.hist.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
+				h.histTaskDuration.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
 			}()
 		}
 	}
-
 }
