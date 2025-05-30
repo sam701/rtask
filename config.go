@@ -16,4 +16,7 @@ type Task struct {
 
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
+
+	// Requests per second. Default 0.5
+	RateLimit float64
 }

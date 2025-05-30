@@ -11,17 +11,29 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/lmittmann/tint"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	configFile    = flag.String("config", "./config.toml", "Path to the TOML file containing configuration")
-	listenAddress = flag.String("listen", "localhost:8800", "Host address to listen on")
+	configFile     = flag.String("config", "./config.toml", "Path to the TOML file containing configuration")
+	listenAddress  = flag.String("api-address", "localhost:8800", "Host address to listen on")
+	metricsAddress = flag.String("metrics-address", "localhost:9090", "Metrics address to listen on")
 )
 
 func main() {
 	setupLogging()
+
 	if err := run(); err != nil {
 		slog.Error("Error running application", "error", err)
+	}
+}
+
+func runMetricsServer() {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	slog.Info("starting metrics server", "address", *metricsAddress, "path", "/metrics")
+	if err := http.ListenAndServe(*metricsAddress, mux); err != nil {
+		slog.Error("Error running metrics server", "error", err)
 	}
 }
 
@@ -50,6 +62,8 @@ func run() error {
 	for name, task := range config.Tasks {
 		http.Handle("/tasks/"+name, NewTaskHandler(name, &task, apiKeys))
 	}
+
+	go runMetricsServer()
 
 	slog.Info("starting server", "address", *listenAddress)
 	if err := http.ListenAndServe(*listenAddress, nil); err != nil {

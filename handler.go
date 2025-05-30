@@ -5,50 +5,76 @@ import (
 	"net/http"
 	"os/exec"
 	"sync"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
 )
 
+const (
+	labelApiKeyUsed = "api_key_used"
+	labelStatus     = "status"
+)
+
 type TaskHandler struct {
-	name          string
-	config        *Task
-	limiter       *rate.Limiter
-	mutex         sync.Mutex
-	allowdApiKeys map[string]bool
+	name    string
+	config  *Task
+	limiter *rate.Limiter
+	mutex   sync.Mutex
+
+	// API key -> key name
+	allowdApiKeys map[string]string
 	logger        *slog.Logger
+
+	hist *prometheus.HistogramVec
 }
 
 // keyMap: name -> key
 func NewTaskHandler(name string, config *Task, keyMap map[string]string) *TaskHandler {
 	logger := slog.With("handler", name)
 
-	keys := make(map[string]bool)
+	keys := make(map[string]string)
 	for _, keyName := range config.ApiKeyNames {
 		key := keyMap[keyName]
 		if key != "" {
 			logger.Debug("added key", "name", keyName)
-			keys[key] = true
+			keys[key] = keyName
 		}
 	}
 	if len(keys) == 0 {
 		logger.Warn("no API keys configured")
 	}
 
-	logger.Info("added handler")
+	rateLimit := 0.5
+	if config.RateLimit > 0 {
+		rateLimit = config.RateLimit
+	}
+
+	logger.Info("added handler", "rate-limit", rateLimit)
 	return &TaskHandler{
 		name:          name,
 		config:        config,
-		limiter:       rate.NewLimiter(0.5, 1),
+		limiter:       rate.NewLimiter(rate.Limit(rateLimit), 1),
 		allowdApiKeys: keys,
 		logger:        logger,
+		hist: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name: "task_duration_seconds",
+				Help: "Duration of task execution",
+				ConstLabels: prometheus.Labels{
+					"handler": name,
+				},
+			},
+			[]string{labelApiKeyUsed, labelStatus},
+		),
 	}
 }
 
 func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Check API token
 	token := r.Header.Get("X-API-Token")
-	h.logger.Debug("auth", "token", token)
-	if !h.allowdApiKeys[token] {
+	apiKeyName := h.allowdApiKeys[token]
+	if apiKeyName == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -61,6 +87,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
+	startTime := time.Now()
 	cmd := exec.Command(h.config.Command[0], h.config.Command[1:]...)
 	cmd.Dir = h.config.Workdir
 	cmd.Stdin = r.Body
@@ -70,9 +97,12 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cmd.Stdout = w
 		cmd.Stderr = w
 		err := cmd.Run()
+		status := "success"
 		if err != nil {
 			h.logger.Error("failed to run the task", "error", err)
+			status = "failure"
 		}
+		h.hist.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
 	} else {
 		err := cmd.Start()
 		if err != nil {
@@ -80,9 +110,12 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			go func() {
 				err := cmd.Wait()
+				status := "success"
 				if err != nil {
 					h.logger.Error("failed to wait for task", "error", err)
+					status = "failure"
 				}
+				h.hist.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
 			}()
 		}
 	}
