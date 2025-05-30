@@ -95,7 +95,11 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mutex.Lock()
+	if !h.mutex.TryLock() {
+		http.Error(w, "In progress", http.StatusTooManyRequests)
+		h.counterRejection.WithLabelValues("locked").Inc()
+		return
+	}
 	defer h.mutex.Unlock()
 
 	startTime := time.Now()
