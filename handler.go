@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os/exec"
@@ -23,8 +25,8 @@ type TaskHandler struct {
 	limiter *rate.Limiter
 	mutex   sync.Mutex
 
-	// API key -> key name
-	allowdApiKeys map[string]string
+	// API key name -> raw hash
+	allowdApiKeys map[string][]byte
 	logger        *slog.Logger
 
 	histTaskDuration *prometheus.HistogramVec
@@ -32,16 +34,21 @@ type TaskHandler struct {
 }
 
 // keyMap: name -> key
-func NewTaskHandler(name string, config *Task, keyMap map[string]string) *TaskHandler {
+func NewTaskHandler(name string, config *Task, keyMap map[string]string) (*TaskHandler, error) {
 	logger := slog.With("handler", name)
 
-	keys := make(map[string]string)
+	keys := make(map[string][]byte)
 	for _, keyName := range config.ApiKeyNames {
 		key := keyMap[keyName]
-		if key != "" {
-			logger.Debug("added key", "name", keyName)
-			keys[key] = keyName
+		if key == "" {
+			return nil, fmt.Errorf("no such key (%s) in keymap", keyName)
 		}
+		logger.Debug("added key", "name", keyName)
+		value, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode key (%s): %w", keyName, err)
+		}
+		keys[keyName] = value
 	}
 	if len(keys) == 0 {
 		logger.Warn("no API keys configured")
@@ -77,15 +84,35 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) *TaskHa
 				"handler": name,
 			},
 		}, []string{"reason"}),
-	}
+	}, nil
 }
 
 func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("X-API-Token")
-	apiKeyName := h.allowdApiKeys[token]
-	if apiKeyName == "" {
+	key := r.Header.Get("X-API-Key")
+
+	if key == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.counterRejection.WithLabelValues("missing_key").Inc()
+		return
+	}
+
+	parsedKey, err := parseKey(key)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.counterRejection.WithLabelValues("invalid_key").Inc()
+		return
+	}
+
+	keyHash := h.allowdApiKeys[parsedKey.Name]
+	if keyHash == nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		h.counterRejection.WithLabelValues("unauthorized").Inc()
+		return
+	}
+
+	if !verifyKey(parsedKey.Key, keyHash) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.counterRejection.WithLabelValues("invalid_hash").Inc()
 		return
 	}
 
@@ -117,7 +144,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("failed to run the task", "error", err)
 			status = "failure"
 		}
-		h.histTaskDuration.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
+		h.histTaskDuration.WithLabelValues(parsedKey.Name, status).Observe(float64(time.Since(startTime).Seconds()))
 	} else {
 		err := cmd.Start()
 		if err != nil {
@@ -130,7 +157,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					h.logger.Error("failed to wait for task", "error", err)
 					status = "failure"
 				}
-				h.histTaskDuration.WithLabelValues(apiKeyName, status).Observe(float64(time.Now().Sub(startTime).Seconds()))
+				h.histTaskDuration.WithLabelValues(parsedKey.Name, status).Observe(float64(time.Since(startTime).Seconds()))
 			}()
 		}
 	}
