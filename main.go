@@ -18,45 +18,6 @@ import (
 func main() {
 	setupLogging()
 
-	runCmd := &cli.Command{
-		Name:  "run",
-		Usage: "Run the task server",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "api-address",
-				Value: "localhost:8800",
-				Usage: "Host address to listen on",
-			},
-			&cli.StringFlag{
-				Name:  "metrics-address",
-				Value: "localhost:9090",
-				Usage: "Metrics address to listen on",
-			},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			return runServer(cmd.String("config"), cmd.String("api-address"), cmd.String("metrics-address"))
-		},
-	}
-
-	addKeyCmd := &cli.Command{
-		Name:  "add-key",
-		Usage: "Add a new API key",
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			args := cmd.Args()
-			if args.Len() < 1 {
-				return fmt.Errorf("name argument is required")
-			}
-			name := args.Get(0)
-
-			config, err := readConfig(cmd.String("config"))
-			if err != nil {
-				return err
-			}
-
-			return addKey(name, config.ApiKeysFile)
-		},
-	}
-
 	app := &cli.Command{
 		Name:  "t8sk",
 		Usage: "task runner with API key management",
@@ -68,8 +29,43 @@ func main() {
 			},
 		},
 		Commands: []*cli.Command{
-			runCmd,
-			addKeyCmd,
+			{
+				Name:  "run",
+				Usage: "Run the task server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "api-address",
+						Value: "localhost:8800",
+						Usage: "Host address to listen on",
+					},
+					&cli.StringFlag{
+						Name:  "metrics-address",
+						Value: "localhost:9090",
+						Usage: "Metrics address to listen on",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return runServer(cmd.String("config"), cmd.String("api-address"), cmd.String("metrics-address"))
+				},
+			},
+			{
+				Name:  "add-key",
+				Usage: "Add a new API key",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args()
+					if args.Len() < 1 {
+						return fmt.Errorf("name argument is required")
+					}
+					name := args.Get(0)
+
+					config, err := readConfig(cmd.String("config"))
+					if err != nil {
+						return err
+					}
+
+					return addKey(name, config.ApiKeysFile)
+				},
+			},
 		},
 	}
 
@@ -85,20 +81,6 @@ func runMetricsServer(metricsAddress string) {
 	if err := http.ListenAndServe(metricsAddress, mux); err != nil {
 		slog.Error("Error running metrics server", "error", err)
 	}
-}
-
-func readConfig(configFile string) (*Config, error) {
-	var config Config
-	_, err := toml.DecodeFile(configFile, &config)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding config file: %w", err)
-	}
-
-	if config.ApiKeysFile == "" {
-		return nil, fmt.Errorf("missing required field api_keys_file in config")
-	}
-
-	return &config, nil
 }
 
 func runServer(configFile, listenAddress, metricsAddress string) error {
