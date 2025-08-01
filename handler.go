@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
@@ -21,7 +25,7 @@ const (
 	labelStatus     = "status"
 )
 
-type TaskHandler struct {
+type TaskManager struct {
 	taskName  string
 	config    *Task
 	limiter   *rate.Limiter
@@ -32,9 +36,12 @@ type TaskHandler struct {
 
 	histTaskDuration *prometheus.HistogramVec
 	counterRejection *prometheus.CounterVec
+
+	taskHistory      map[string]*taskExecutionHistoryItem
+	taskHistoryMutex sync.RWMutex
 }
 
-func NewTaskHandler(name string, config *Task, keyStore *APIKeyStore) (*TaskHandler, error) {
+func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskManager, error) {
 	logger := slog.With("handler", name)
 
 	if len(config.APIKeyNames) == 0 {
@@ -52,7 +59,7 @@ func NewTaskHandler(name string, config *Task, keyStore *APIKeyStore) (*TaskHand
 	}
 
 	logger.Info("added handler", "rate-limit", rateLimit)
-	return &TaskHandler{
+	tm := &TaskManager{
 		taskName:    name,
 		config:      config,
 		limiter:     rate.NewLimiter(rate.Limit(rateLimit), 1),
@@ -76,64 +83,101 @@ func NewTaskHandler(name string, config *Task, keyStore *APIKeyStore) (*TaskHand
 				"handler": name,
 			},
 		}, []string{"reason"}),
-	}, nil
+		taskHistory: make(map[string]*taskExecutionHistoryItem),
+	}
+
+	// Start cleanup goroutine
+	go tm.cleanupHistory()
+
+	return tm, nil
 }
 
-func (h *TaskHandler) authorize(w http.ResponseWriter, r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
+func (tm *TaskManager) authorize(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
 
-	if authHeader == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		h.counterRejection.WithLabelValues("missing_key").Inc()
-		return ""
-	}
+		if authHeader == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			tm.counterRejection.WithLabelValues("missing_key").Inc()
+			return
+		}
 
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		h.counterRejection.WithLabelValues("invalid_header").Inc()
-		return ""
-	}
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			tm.counterRejection.WithLabelValues("invalid_header").Inc()
+			return
+		}
 
-	strKey := authHeader[7:]
-	verificationResult := h.keyVerifier.Verify(strKey)
-	if !verificationResult.Success {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		h.counterRejection.WithLabelValues(verificationResult.FailureReason).Inc()
-		return ""
-	}
+		strKey := authHeader[7:]
+		verificationResult := tm.keyVerifier.Verify(strKey)
+		if !verificationResult.Success {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			tm.counterRejection.WithLabelValues(verificationResult.FailureReason).Inc()
+			return
+		}
 
-	if !h.limiter.Allow() {
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-		h.counterRejection.WithLabelValues("limit_exceeded").Inc()
-		return ""
-	}
+		if !tm.limiter.Allow() {
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			tm.counterRejection.WithLabelValues("limit_exceeded").Inc()
+			return
+		}
 
-	if !h.taskMutex.TryLock() {
-		http.Error(w, "In progress", http.StatusTooManyRequests)
-		h.counterRejection.WithLabelValues("locked").Inc()
-		return ""
-	}
-
-	return verificationResult.KeyName
+		ctx := context.WithValue(r.Context(), "keyName", verificationResult.KeyName)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
-func (h *TaskHandler) truncateString(s string, maxLen int) string {
+func (tm *TaskManager) taskLock(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !tm.taskMutex.TryLock() {
+			http.Error(w, "In progress", http.StatusTooManyRequests)
+			tm.counterRejection.WithLabelValues("locked").Inc()
+			return
+		}
+		defer tm.taskMutex.Unlock()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen]
 }
 
-func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	keyName := h.authorize(w, r)
-	if keyName == "" {
-		return
-	}
-	defer h.taskMutex.Unlock()
+func (tm *TaskManager) cleanupHistory() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
 
+	for range ticker.C {
+		tm.taskHistoryMutex.Lock()
+		cutoff := time.Now().Add(-24 * time.Hour)
+
+		// Remove items older than 24 hours
+		for id, item := range tm.taskHistory {
+			if item.StartedAt.Before(cutoff) {
+				delete(tm.taskHistory, id)
+			}
+		}
+
+		tm.taskHistoryMutex.Unlock()
+	}
+}
+
+func (tm *TaskManager) generateExecutionID() string {
+	bytes := make([]byte, 8)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
+	executionID := tm.generateExecutionID()
 	startTime := time.Now()
-	cmd := exec.Command(h.config.Command[0], h.config.Command[1:]...)
-	cmd.Dir = h.config.Workdir
+
+	cmd := exec.Command(tm.config.Command[0], tm.config.Command[1:]...)
+	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = r.Body
 	defer r.Body.Close()
 
@@ -142,11 +186,12 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	duration := time.Since(startTime)
 
 	exitCode := 0
 	status := "success"
 	if err != nil {
-		h.logger.Warn("failed to run the task", "error", err)
+		tm.logger.Warn("failed to run the task", "error", err)
 		status = "failure"
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
@@ -155,20 +200,64 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(time.Since(startTime).Seconds()))
+	keyName := r.Context().Value("keyName").(string)
+	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
 
-	result := taskExecutionResult{
+	result := &taskExecutionResult{
+		TaskID:   executionID,
 		ExitCode: exitCode,
-		StdOut:   h.truncateString(stdout.String(), 4096),
-		StdErr:   h.truncateString(stderr.String(), 4096),
+		StdOut:   truncateString(stdout.String(), 4096),
+		StdErr:   truncateString(stderr.String(), 4096),
 	}
+
+	// Store in history
+	historyItem := &taskExecutionHistoryItem{
+		StartedAt: startTime,
+		Duration:  duration,
+		Result:    result,
+	}
+
+	tm.taskHistoryMutex.Lock()
+	tm.taskHistory[executionID] = historyItem
+	tm.taskHistoryMutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
 
+func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
+	r.Route("/tasks/"+tm.taskName, func(r chi.Router) {
+		r.Use(tm.authorize)
+		r.With(tm.taskLock).Post("/", tm.runTask)
+		r.Get("/status/{executionID}", tm.getStatus)
+	})
+}
+
+func (tm *TaskManager) getStatus(w http.ResponseWriter, r *http.Request) {
+	executionID := chi.URLParam(r, "executionID")
+
+	tm.taskHistoryMutex.RLock()
+	historyItem, exists := tm.taskHistory[executionID]
+	tm.taskHistoryMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Execution not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(historyItem)
+}
+
 type taskExecutionResult struct {
+	TaskID   string `json:"task_id"`
 	ExitCode int    `json:"exit_code"`
 	StdOut   string `json:"stdout"`
 	StdErr   string `json:"stderr"`
+}
+
+type taskExecutionHistoryItem struct {
+	StartedAt time.Time            `json:"started_at"`
+	Duration  time.Duration        `json:"duration"`
+	Result    *taskExecutionResult `json:"result"`
 }

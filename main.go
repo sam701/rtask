@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/lmittmann/tint"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v3"
@@ -90,18 +91,19 @@ func runServer(configFile, listenAddress, metricsAddress string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create key store: %w", err)
 	}
+	r := chi.NewRouter()
 	for name, task := range config.Tasks {
-		handler, err := NewTaskHandler(name, &task, keyStore)
+		tm, err := NewTaskManager(name, &task, keyStore)
 		if err != nil {
-			return fmt.Errorf("failed creating task handler for %s: %w", name, err)
+			return fmt.Errorf("failed creating task manager for %s: %w", name, err)
 		}
-		http.Handle("/tasks/"+name, handler)
+		tm.ConfigureRoutes(r)
 	}
 
 	go runMetricsServer(metricsAddress)
 
 	slog.Info("starting server", "address", listenAddress)
-	if err := http.ListenAndServe(listenAddress, nil); err != nil {
+	if err := http.ListenAndServe(listenAddress, r); err != nil {
 		return fmt.Errorf("failed starting server: %w", err)
 	}
 	return nil
