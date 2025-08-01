@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -76,19 +79,19 @@ func NewTaskHandler(name string, config *Task, keyStore *APIKeyStore) (*TaskHand
 	}, nil
 }
 
-func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler) authorize(w http.ResponseWriter, r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 
 	if authHeader == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		h.counterRejection.WithLabelValues("missing_key").Inc()
-		return
+		return ""
 	}
 
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		h.counterRejection.WithLabelValues("invalid_header").Inc()
-		return
+		return ""
 	}
 
 	strKey := authHeader[7:]
@@ -96,18 +99,34 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !verificationResult.Success {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		h.counterRejection.WithLabelValues(verificationResult.FailureReason).Inc()
-		return
+		return ""
 	}
 
 	if !h.limiter.Allow() {
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		h.counterRejection.WithLabelValues("limit_exceeded").Inc()
-		return
+		return ""
 	}
 
 	if !h.taskMutex.TryLock() {
 		http.Error(w, "In progress", http.StatusTooManyRequests)
 		h.counterRejection.WithLabelValues("locked").Inc()
+		return ""
+	}
+
+	return verificationResult.KeyName
+}
+
+func (h *TaskHandler) truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	keyName := h.authorize(w, r)
+	if keyName == "" {
 		return
 	}
 	defer h.taskMutex.Unlock()
@@ -118,30 +137,38 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdin = r.Body
 	defer r.Body.Close()
 
-	if h.config.Blocking {
-		cmd.Stdout = w
-		cmd.Stderr = w
-		err := cmd.Run()
-		status := "success"
-		if err != nil {
-			h.logger.Error("failed to run the task", "error", err)
-			status = "failure"
-		}
-		h.histTaskDuration.WithLabelValues(verificationResult.KeyName, status).Observe(float64(time.Since(startTime).Seconds()))
-	} else {
-		err := cmd.Start()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		} else {
-			go func() {
-				err := cmd.Wait()
-				status := "success"
-				if err != nil {
-					h.logger.Error("failed to wait for task", "error", err)
-					status = "failure"
-				}
-				h.histTaskDuration.WithLabelValues(verificationResult.KeyName, status).Observe(float64(time.Since(startTime).Seconds()))
-			}()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	exitCode := 0
+	status := "success"
+	if err != nil {
+		h.logger.Warn("failed to run the task", "error", err)
+		status = "failure"
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
+				exitCode = waitStatus.ExitStatus()
+			}
 		}
 	}
+
+	h.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(time.Since(startTime).Seconds()))
+
+	result := taskExecutionResult{
+		ExitCode: exitCode,
+		StdOut:   h.truncateString(stdout.String(), 4096),
+		StdErr:   h.truncateString(stderr.String(), 4096),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+type taskExecutionResult struct {
+	ExitCode int    `json:"exit_code"`
+	StdOut   string `json:"stdout"`
+	StdErr   string `json:"stderr"`
 }
