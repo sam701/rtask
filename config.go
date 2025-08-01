@@ -11,14 +11,14 @@ type Config struct {
 	Tasks map[string]Task
 
 	// Path to the TOML file containing API keys.
-	ApiKeysFile string
+	APIKeysFile string
 }
 
 type Task struct {
 	// Command with its arguments
 	Command     []string
 	Workdir     string
-	ApiKeyNames []string
+	APIKeyNames []string
 
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
@@ -34,7 +34,7 @@ func readConfig(configFile string) (*Config, error) {
 		return nil, fmt.Errorf("error decoding config file: %w", err)
 	}
 
-	if config.ApiKeysFile == "" {
+	if config.APIKeysFile == "" {
 		return nil, fmt.Errorf("missing required field api_keys_file in config")
 	}
 

@@ -6,10 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/lmittmann/tint"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v3"
@@ -19,7 +17,7 @@ func main() {
 	setupLogging()
 
 	app := &cli.Command{
-		Name:  "t8sk",
+		Name:  "rtask",
 		Usage: "task runner with API key management",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -51,19 +49,18 @@ func main() {
 			{
 				Name:  "add-key",
 				Usage: "Add a new API key",
+				Arguments: []cli.Argument{
+					&cli.StringArg{
+						Name: "API_KEY_NAME",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("name argument is required")
-					}
-					name := args.Get(0)
-
 					config, err := readConfig(cmd.String("config"))
 					if err != nil {
 						return err
 					}
 
-					return addKey(name, config.ApiKeysFile)
+					return addKey(cmd.StringArg("API_KEY_NAME"), config.APIKeysFile)
 				},
 			},
 		},
@@ -89,19 +86,12 @@ func runServer(configFile, listenAddress, metricsAddress string) error {
 		return err
 	}
 
-	var apiKeys map[string]string
-	if !filepath.IsAbs(config.ApiKeysFile) {
-		// Make API keys file path relative to config file directory
-		configDir := filepath.Dir(configFile)
-		config.ApiKeysFile = filepath.Join(configDir, config.ApiKeysFile)
-	}
-	_, err = toml.DecodeFile(config.ApiKeysFile, &apiKeys)
+	keyStore, err := NewStore(config.APIKeysFile)
 	if err != nil {
-		return fmt.Errorf("failed decoding api keys file: %w", err)
+		return fmt.Errorf("failed to create key store: %w", err)
 	}
-
 	for name, task := range config.Tasks {
-		handler, err := NewTaskHandler(name, &task, apiKeys)
+		handler, err := NewTaskHandler(name, &task, keyStore)
 		if err != nil {
 			return fmt.Errorf("failed creating task handler for %s: %w", name, err)
 		}

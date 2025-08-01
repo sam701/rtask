@@ -1,4 +1,4 @@
-module t8sk
+module rtask
 
 go 1.24.3
 
@@ -8,10 +8,13 @@ require (
 	golang.org/x/crypto v0.40.0
 )
 
+require github.com/x448/float16 v0.8.4 // indirect
+
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/client_model v0.6.1 // indirect

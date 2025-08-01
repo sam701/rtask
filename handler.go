@@ -1,11 +1,10 @@
 package main
 
 import (
-	"encoding/base64"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,43 +14,33 @@ import (
 )
 
 const (
-	labelApiKeyUsed = "api_key_used"
+	labelAPIKeyUsed = "api_key_used"
 	labelStatus     = "status"
 )
 
 type TaskHandler struct {
-	name    string
-	config  *Task
-	limiter *rate.Limiter
-	mutex   sync.Mutex
+	taskName  string
+	config    *Task
+	limiter   *rate.Limiter
+	taskMutex sync.Mutex
 
-	// API key name -> raw hash
-	allowdApiKeys map[string][]byte
-	logger        *slog.Logger
+	keyVerifier *KeyVerifier
+	logger      *slog.Logger
 
 	histTaskDuration *prometheus.HistogramVec
 	counterRejection *prometheus.CounterVec
 }
 
-// keyMap: name -> key
-func NewTaskHandler(name string, config *Task, keyMap map[string]string) (*TaskHandler, error) {
+func NewTaskHandler(name string, config *Task, keyStore *APIKeyStore) (*TaskHandler, error) {
 	logger := slog.With("handler", name)
 
-	keys := make(map[string][]byte)
-	for _, keyName := range config.ApiKeyNames {
-		key := keyMap[keyName]
-		if key == "" {
-			return nil, fmt.Errorf("no such key (%s) in keymap", keyName)
-		}
-		logger.Debug("added key", "name", keyName)
-		value, err := base64.StdEncoding.DecodeString(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode key (%s): %w", keyName, err)
-		}
-		keys[keyName] = value
-	}
-	if len(keys) == 0 {
+	if len(config.APIKeyNames) == 0 {
 		logger.Warn("no API keys configured")
+	}
+
+	keyVerifier, err := keyStore.KeyVerifier(config.APIKeyNames)
+	if err != nil {
+		return nil, err
 	}
 
 	rateLimit := 0.5
@@ -61,11 +50,11 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) (*TaskH
 
 	logger.Info("added handler", "rate-limit", rateLimit)
 	return &TaskHandler{
-		name:          name,
-		config:        config,
-		limiter:       rate.NewLimiter(rate.Limit(rateLimit), 1),
-		allowdApiKeys: keys,
-		logger:        logger,
+		taskName:    name,
+		config:      config,
+		limiter:     rate.NewLimiter(rate.Limit(rateLimit), 1),
+		keyVerifier: keyVerifier,
+		logger:      logger,
 
 		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -75,7 +64,7 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) (*TaskH
 					"handler": name,
 				},
 			},
-			[]string{labelApiKeyUsed, labelStatus},
+			[]string{labelAPIKeyUsed, labelStatus},
 		),
 		counterRejection: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "task_rejection_total",
@@ -88,31 +77,25 @@ func NewTaskHandler(name string, config *Task, keyMap map[string]string) (*TaskH
 }
 
 func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	key := r.Header.Get("X-API-Key")
+	authHeader := r.Header.Get("Authorization")
 
-	if key == "" {
+	if authHeader == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		h.counterRejection.WithLabelValues("missing_key").Inc()
 		return
 	}
 
-	parsedKey, err := parseKey(key)
-	if err != nil {
+	if !strings.HasPrefix(authHeader, "Bearer ") {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		h.counterRejection.WithLabelValues("invalid_key").Inc()
+		h.counterRejection.WithLabelValues("invalid_header").Inc()
 		return
 	}
 
-	keyHash := h.allowdApiKeys[parsedKey.Name]
-	if keyHash == nil {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		h.counterRejection.WithLabelValues("unauthorized").Inc()
-		return
-	}
-
-	if !verifyKey(parsedKey.Key, keyHash) {
+	strKey := authHeader[7:]
+	verificationResult := h.keyVerifier.Verify(strKey)
+	if !verificationResult.Success {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		h.counterRejection.WithLabelValues("invalid_hash").Inc()
+		h.counterRejection.WithLabelValues(verificationResult.FailureReason).Inc()
 		return
 	}
 
@@ -122,12 +105,12 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.mutex.TryLock() {
+	if !h.taskMutex.TryLock() {
 		http.Error(w, "In progress", http.StatusTooManyRequests)
 		h.counterRejection.WithLabelValues("locked").Inc()
 		return
 	}
-	defer h.mutex.Unlock()
+	defer h.taskMutex.Unlock()
 
 	startTime := time.Now()
 	cmd := exec.Command(h.config.Command[0], h.config.Command[1:]...)
@@ -144,7 +127,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("failed to run the task", "error", err)
 			status = "failure"
 		}
-		h.histTaskDuration.WithLabelValues(parsedKey.Name, status).Observe(float64(time.Since(startTime).Seconds()))
+		h.histTaskDuration.WithLabelValues(verificationResult.KeyName, status).Observe(float64(time.Since(startTime).Seconds()))
 	} else {
 		err := cmd.Start()
 		if err != nil {
@@ -157,7 +140,7 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					h.logger.Error("failed to wait for task", "error", err)
 					status = "failure"
 				}
-				h.histTaskDuration.WithLabelValues(parsedKey.Name, status).Observe(float64(time.Since(startTime).Seconds()))
+				h.histTaskDuration.WithLabelValues(verificationResult.KeyName, status).Observe(float64(time.Since(startTime).Seconds()))
 			}()
 		}
 	}
