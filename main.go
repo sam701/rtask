@@ -75,7 +75,7 @@ func main() {
 func runMetricsServer(metricsAddress string) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	slog.Info("starting metrics server", "address", metricsAddress, "path", "/metrics")
+	slog.Info("starting metrics server", "url", "http://"+metricsAddress+"/metrics")
 	if err := http.ListenAndServe(metricsAddress, mux); err != nil {
 		slog.Error("Error running metrics server", "error", err)
 	}
@@ -121,6 +121,6 @@ func setupLogging() {
 		TimeFormat: time.RFC3339,
 	})))
 	if err != nil {
-		slog.Warn("invalid GO_LOG value, ", "GO_LOG", val, "error", err)
+		slog.Warn("invalid GO_LOG value", "GO_LOG", val, "error", err)
 	}
 }

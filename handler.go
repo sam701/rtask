@@ -25,6 +25,10 @@ const (
 	labelStatus     = "status"
 )
 
+type contextKey string
+
+const keyNameContextKey contextKey = "keyName"
+
 type TaskManager struct {
 	taskName  string
 	config    *Task
@@ -122,7 +126,7 @@ func (tm *TaskManager) authorize(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "keyName", verificationResult.KeyName)
+		ctx := context.WithValue(r.Context(), keyNameContextKey, verificationResult.KeyName)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -200,7 +204,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	keyName := r.Context().Value("keyName").(string)
+	keyName := r.Context().Value(keyNameContextKey).(string)
 	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
 
 	result := &taskExecutionResult{
@@ -212,6 +216,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 
 	// Store in history
 	historyItem := &taskExecutionHistoryItem{
+		KeyName:   keyName,
 		StartedAt: startTime,
 		Duration:  duration,
 		Result:    result,
@@ -257,6 +262,7 @@ type taskExecutionResult struct {
 }
 
 type taskExecutionHistoryItem struct {
+	KeyName   string                `json:"key_name"`
 	StartedAt time.Time            `json:"started_at"`
 	Duration  time.Duration        `json:"duration"`
 	Result    *taskExecutionResult `json:"result"`
