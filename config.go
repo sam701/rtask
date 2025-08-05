@@ -26,7 +26,8 @@ type Task struct {
 	// Requests per second. Default 0.5
 	RateLimit float64
 
-	MaxInputSizeBytes int64
+	MaxInputBytes  int64
+	MaxOutputBytes int64
 
 	ExecutionTimeoutSeconds int64
 }

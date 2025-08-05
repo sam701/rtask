@@ -62,7 +62,7 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 		rateLimit = config.RateLimit
 	}
 
-	logger.Info("added handler", "rate-limit", rateLimit)
+	logger.Info("added handler", "rate-limit", rateLimit, "config", config)
 	tm := &TaskManager{
 		taskName:    name,
 		config:      config,
@@ -180,11 +180,11 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	executionID := tm.generateExecutionID()
 	startTime := time.Now()
 
-	maxInputSize := tm.config.MaxInputSizeBytes
-	if maxInputSize <= 0 {
-		maxInputSize = 10240
+	maxInputBytes := tm.config.MaxInputBytes
+	if maxInputBytes <= 0 {
+		maxInputBytes = 16 * 1024
 	}
-	stdin := http.MaxBytesReader(w, r.Body, maxInputSize)
+	stdin := http.MaxBytesReader(w, r.Body, maxInputBytes)
 
 	executionTimeout := tm.config.ExecutionTimeoutSeconds
 	if executionTimeout <= 0 {
@@ -208,17 +208,22 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 
 	status := "success"
 	httpStatus := http.StatusOK
+	maxOutput := tm.config.MaxOutputBytes
+	if maxOutput <= 0 {
+		maxOutput = 16 * 1024
+	}
 	result := &taskExecutionResult{
 		TaskID:   executionID,
 		ExitCode: 0,
-		StdOut:   truncateString(stdout.String(), 4096),
-		StdErr:   truncateString(stderr.String(), 4096),
+		StdOut:   truncateString(stdout.String(), int(maxOutput)),
+		StdErr:   truncateString(stderr.String(), int(maxOutput)),
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.ExitCode = -1
 		httpStatus = http.StatusRequestTimeout
 		tm.counterRejection.WithLabelValues("timeout").Inc()
+		status = "failure"
 	} else if err != nil {
 		tm.logger.Warn("failed to run the task", "error", err)
 		status = "failure"
