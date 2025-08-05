@@ -180,9 +180,15 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	executionID := tm.generateExecutionID()
 	startTime := time.Now()
 
+	maxInputSize := tm.config.MaxInputSizeBytes
+	if maxInputSize <= 0 {
+		maxInputSize = 10240
+	}
+	stdin := http.MaxBytesReader(w, r.Body, maxInputSize)
+
 	cmd := exec.Command(tm.config.Command[0], tm.config.Command[1:]...)
 	cmd.Dir = tm.config.Workdir
-	cmd.Stdin = r.Body
+	cmd.Stdin = stdin
 	defer r.Body.Close()
 
 	var stdout, stderr bytes.Buffer
@@ -262,7 +268,7 @@ type taskExecutionResult struct {
 }
 
 type taskExecutionHistoryItem struct {
-	KeyName   string                `json:"key_name"`
+	KeyName   string               `json:"key_name"`
 	StartedAt time.Time            `json:"started_at"`
 	Duration  time.Duration        `json:"duration"`
 	Result    *taskExecutionResult `json:"result"`
