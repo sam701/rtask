@@ -27,6 +27,8 @@ type Task struct {
 	RateLimit float64
 
 	MaxInputSizeBytes int64
+
+	ExecutionTimeoutSeconds int64
 }
 
 func readConfig(configFile string) (*Config, error) {

@@ -186,7 +186,15 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	}
 	stdin := http.MaxBytesReader(w, r.Body, maxInputSize)
 
-	cmd := exec.Command(tm.config.Command[0], tm.config.Command[1:]...)
+	executionTimeout := tm.config.ExecutionTimeoutSeconds
+	if executionTimeout <= 0 {
+		executionTimeout = 30
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(executionTimeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, tm.config.Command[0], tm.config.Command[1:]...)
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = stdin
 	defer r.Body.Close()
@@ -198,27 +206,31 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
-	exitCode := 0
 	status := "success"
-	if err != nil {
+	httpStatus := http.StatusOK
+	result := &taskExecutionResult{
+		TaskID:   executionID,
+		ExitCode: 0,
+		StdOut:   truncateString(stdout.String(), 4096),
+		StdErr:   truncateString(stderr.String(), 4096),
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		result.ExitCode = -1
+		httpStatus = http.StatusRequestTimeout
+		tm.counterRejection.WithLabelValues("timeout").Inc()
+	} else if err != nil {
 		tm.logger.Warn("failed to run the task", "error", err)
 		status = "failure"
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
-				exitCode = waitStatus.ExitStatus()
+				result.ExitCode = waitStatus.ExitStatus()
 			}
 		}
 	}
 
 	keyName := r.Context().Value(keyNameContextKey).(string)
 	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
-
-	result := &taskExecutionResult{
-		TaskID:   executionID,
-		ExitCode: exitCode,
-		StdOut:   truncateString(stdout.String(), 4096),
-		StdErr:   truncateString(stderr.String(), 4096),
-	}
 
 	// Store in history
 	historyItem := &taskExecutionHistoryItem{
@@ -233,6 +245,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	tm.taskHistoryMutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
 	json.NewEncoder(w).Encode(result)
 }
 
