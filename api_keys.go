@@ -47,7 +47,7 @@ func NewStore(filename string) (*APIKeyStore, error) {
 	}
 
 	_, err := toml.DecodeFile(filename, &s.encodedKeys)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode TOML file (%s): %w", filename, err)
 	}
 

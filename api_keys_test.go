@@ -6,9 +6,19 @@ import (
 	"testing"
 )
 
+func createTestKeyFile(t *testing.T, tempDir string) string {
+	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	file, err := os.Create(keyFile)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	file.Close()
+	return keyFile
+}
+
 func TestNewStore_EmptyKeystore(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -36,19 +46,15 @@ func TestNewStore_NonExistentFile(t *testing.T) {
 	tempDir := t.TempDir()
 	keyFile := filepath.Join(tempDir, "nonexistent.toml")
 
-	store, err := NewStore(keyFile)
-	if err != nil {
-		t.Fatalf("Expected no error for non-existent file, got: %v", err)
-	}
-
-	if store == nil {
-		t.Fatal("Expected non-nil store")
+	_, err := NewStore(keyFile)
+	if err == nil {
+		t.Fatal("Expected error for non-existent file")
 	}
 }
 
 func TestAddKey(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -97,7 +103,7 @@ func TestAddKey(t *testing.T) {
 
 func TestAddKey_MultipleKeys(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -125,7 +131,7 @@ func TestAddKey_MultipleKeys(t *testing.T) {
 
 func TestKeyVerifier_EmptyAllowedKeys(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -148,7 +154,7 @@ func TestKeyVerifier_EmptyAllowedKeys(t *testing.T) {
 
 func TestKeyVerifier_WithValidKey(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -182,7 +188,7 @@ func TestKeyVerifier_WithValidKey(t *testing.T) {
 
 func TestKeyVerifier_WithInvalidKey(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -216,7 +222,7 @@ func TestKeyVerifier_WithInvalidKey(t *testing.T) {
 
 func TestKeyVerifier_WithWrongKey(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store, err := NewStore(keyFile)
 	if err != nil {
@@ -254,7 +260,7 @@ func TestKeyVerifier_WithWrongKey(t *testing.T) {
 
 func TestKeyStorePersistence(t *testing.T) {
 	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "test-keys.toml")
+	keyFile := createTestKeyFile(t, tempDir)
 
 	store1, err := NewStore(keyFile)
 	if err != nil {

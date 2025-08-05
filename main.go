@@ -26,6 +26,11 @@ func main() {
 				Value: "./config.toml",
 				Usage: "Path to the TOML file containing configuration",
 			},
+			&cli.StringFlag{
+				Name:  "api-keys-file",
+				Value: "./keys.toml",
+				Usage: "Path to the TOML file containing API keys",
+			},
 		},
 		Commands: []*cli.Command{
 			{
@@ -44,7 +49,7 @@ func main() {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return runServer(cmd.String("config"), cmd.String("api-address"), cmd.String("metrics-address"))
+					return runServer(cmd.String("config"), cmd.String("api-keys-file"), cmd.String("api-address"), cmd.String("metrics-address"))
 				},
 			},
 			{
@@ -56,12 +61,7 @@ func main() {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					config, err := readConfig(cmd.String("config"))
-					if err != nil {
-						return err
-					}
-
-					return addKey(cmd.StringArg("API_KEY_NAME"), config.APIKeysFile)
+					return addKey(cmd.StringArg("API_KEY_NAME"), cmd.String("api-keys-file"))
 				},
 			},
 		},
@@ -81,13 +81,13 @@ func runMetricsServer(metricsAddress string) {
 	}
 }
 
-func runServer(configFile, listenAddress, metricsAddress string) error {
+func runServer(configFile, apiKeysFile, listenAddress, metricsAddress string) error {
 	config, err := readConfig(configFile)
 	if err != nil {
 		return err
 	}
 
-	keyStore, err := NewStore(config.APIKeysFile)
+	keyStore, err := NewStore(apiKeysFile)
 	if err != nil {
 		return fmt.Errorf("failed to create key store: %w", err)
 	}

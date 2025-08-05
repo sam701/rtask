@@ -9,9 +9,6 @@ import (
 type Config struct {
 	// Maps task names to the task definitions.
 	Tasks map[string]Task
-
-	// Path to the TOML file containing API keys.
-	APIKeysFile string
 }
 
 type Task struct {
@@ -37,10 +34,6 @@ func readConfig(configFile string) (*Config, error) {
 	_, err := toml.DecodeFile(configFile, &config)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding config file: %w", err)
-	}
-
-	if config.APIKeysFile == "" {
-		return nil, fmt.Errorf("missing required field api_keys_file in config")
 	}
 
 	return &config, nil
