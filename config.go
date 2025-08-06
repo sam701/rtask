@@ -27,6 +27,9 @@ type Task struct {
 	MaxOutputBytes int64
 
 	ExecutionTimeoutSeconds int64
+
+	// If true, stderr is redirected to stdout. Default true
+	RedirectStderr *bool
 }
 
 func readConfig(configFile string) (*Config, error) {

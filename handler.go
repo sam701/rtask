@@ -197,11 +197,20 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, tm.config.Command[0], tm.config.Command[1:]...)
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = stdin
+	// TODO: set env
 	defer r.Body.Close()
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	// RedirectStderr defaults to true, so redirect stderr to stdout unless explicitly set to false
+	redirect := tm.config.RedirectStderr == nil || *tm.config.RedirectStderr
+	if redirect {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stdout
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 
 	err := cmd.Run()
 	duration := time.Since(startTime)
@@ -215,8 +224,13 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	result := &taskExecutionResult{
 		TaskID:   executionID,
 		ExitCode: 0,
-		StdOut:   truncateString(stdout.String(), int(maxOutput)),
-		StdErr:   truncateString(stderr.String(), int(maxOutput)),
+	}
+
+	if redirect {
+		result.StdOut = truncateString(stdout.String(), int(maxOutput))
+	} else {
+		result.StdOut = truncateString(stdout.String(), int(maxOutput))
+		result.StdErr = truncateString(stderr.String(), int(maxOutput))
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
@@ -281,8 +295,8 @@ func (tm *TaskManager) getStatus(w http.ResponseWriter, r *http.Request) {
 type taskExecutionResult struct {
 	TaskID   string `json:"task_id"`
 	ExitCode int    `json:"exit_code"`
-	StdOut   string `json:"stdout"`
-	StdErr   string `json:"stderr"`
+	StdOut   string `json:"stdout,omitempty"`
+	StdErr   string `json:"stderr,omitempty"`
 }
 
 type taskExecutionHistoryItem struct {
