@@ -15,8 +15,6 @@ import (
 )
 
 func main() {
-	setupLogging()
-
 	app := &cli.Command{
 		Name:  "rtask",
 		Usage: "task runner with API key management",
@@ -30,6 +28,12 @@ func main() {
 				Name:  "api-keys-file",
 				Value: "./keys.toml",
 				Usage: "Path to the TOML file containing API keys",
+			},
+			&cli.StringFlag{
+				Name:    "log-format",
+				Value:   "text",
+				Usage:   "Log format (text or json)",
+				Sources: cli.EnvVars("LOG_FORMAT"),
 			},
 		},
 		Commands: []*cli.Command{
@@ -49,6 +53,7 @@ func main() {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					setupLogging(cmd.String("log-format"))
 					return runServer(cmd.String("config"), cmd.String("api-keys-file"), cmd.String("api-address"), cmd.String("metrics-address"))
 				},
 			},
@@ -61,6 +66,7 @@ func main() {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					setupLogging(cmd.String("log-format"))
 					return addKey(cmd.StringArg("API_KEY_NAME"), cmd.String("api-keys-file"))
 				},
 			},
@@ -109,17 +115,30 @@ func runServer(configFile, apiKeysFile, listenAddress, metricsAddress string) er
 	return nil
 }
 
-func setupLogging() {
+func setupLogging(logFormat string) {
 	val, valSet := os.LookupEnv("GO_LOG")
 	logLevel := slog.LevelInfo
 	var err error
 	if valSet {
 		err = logLevel.UnmarshalText([]byte(val))
 	}
-	slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{
-		Level:      logLevel,
-		TimeFormat: time.RFC3339,
-	})))
+
+	var handler slog.Handler
+	switch logFormat {
+	case "json":
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: logLevel,
+		})
+	case "text":
+		fallthrough
+	default:
+		handler = tint.NewHandler(os.Stderr, &tint.Options{
+			Level:      logLevel,
+			TimeFormat: time.RFC3339,
+		})
+	}
+
+	slog.SetDefault(slog.New(handler))
 	if err != nil {
 		slog.Warn("invalid GO_LOG value", "GO_LOG", val, "error", err)
 	}
