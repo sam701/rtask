@@ -250,6 +250,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 
 	keyName := r.Context().Value(keyNameContextKey).(string)
 	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
+	tm.logger.Info("done", "status", status, "stdout", result.StdOut, "stderr", result.StdErr)
 
 	// Store in history
 	historyItem := &taskExecutionHistoryItem{
