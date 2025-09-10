@@ -72,8 +72,9 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 
 		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name: "task_duration_seconds",
-				Help: "Duration of task execution",
+				Name:    "task_duration_seconds",
+				Help:    "Duration of task execution",
+				Buckets: config.DurationHistogramBuckets,
 				ConstLabels: prometheus.Labels{
 					"handler": name,
 				},
@@ -237,7 +238,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 		result.ExitCode = -1
 		httpStatus = http.StatusRequestTimeout
 		tm.counterRejection.WithLabelValues("timeout").Inc()
-		status = "failure"
+		status = "timeout"
 	} else if err != nil {
 		tm.logger.Warn("failed to run the task", "error", err)
 		status = "failure"

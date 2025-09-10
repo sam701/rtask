@@ -30,6 +30,9 @@ type Task struct {
 
 	// If true, stderr is redirected to stdout. Default true
 	RedirectStderr *bool
+
+	// Histogram buckets for task duration metrics in seconds
+	DurationHistogramBuckets []float64
 }
 
 func readConfig(configFile string) (*Config, error) {
