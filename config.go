@@ -20,9 +20,6 @@ type Task struct {
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
 
-	// Requests per second. Default 0.5
-	RateLimit float64
-
 	MaxInputBytes  int64
 	MaxOutputBytes int64
 
@@ -33,6 +30,12 @@ type Task struct {
 
 	// Histogram buckets for task duration metrics in seconds
 	DurationHistogramBuckets []float64
+
+	// Requests per second. Default 0 = unlimited
+	RateLimit float64
+
+	// Maximum number of concurrent task executions. Default 0 = unlimited
+	MaxConcurrentTasks int
 }
 
 func readConfig(configFile string) (*Config, error) {

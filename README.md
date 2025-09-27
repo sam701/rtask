@@ -61,7 +61,13 @@ rateLimit = 0.5
 - `workdir`: Working directory for command execution (optional)
 - `apiKeyNames`: List of API key names that can access this task
 - `blocking`: If true, streams stdout/stderr to HTTP response; if false, runs asynchronously
-- `rateLimit`: Requests per second (default: 0.5)
+- `rateLimit`: Requests per second (default: 0 = unlimited)
+- `maxConcurrentTasks`: Maximum number of concurrent task executions (default: 0 = unlimited)
+- `maxInputBytes`: Maximum input size in bytes (default: 16KB)
+- `maxOutputBytes`: Maximum output size in bytes (default: 16KB)
+- `executionTimeoutSeconds`: Task execution timeout in seconds (default: 30)
+- `redirectStderr`: If true, redirects stderr to stdout (default: true)
+- `durationHistogramBuckets`: Custom histogram buckets for task duration metrics
 
 ## Usage
 

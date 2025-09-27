@@ -30,10 +30,11 @@ type contextKey string
 const keyNameContextKey contextKey = "keyName"
 
 type TaskManager struct {
-	taskName  string
-	config    *Task
-	limiter   *rate.Limiter
-	taskMutex sync.Mutex
+	taskName string
+	config   *Task
+
+	requestRateLimiter *rate.Limiter
+	taskSemaphore      chan struct{}
 
 	keyVerifier *KeyVerifier
 	logger      *slog.Logger
@@ -57,18 +58,25 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 		return nil, err
 	}
 
-	rateLimit := 0.5
+	logger.Info("added handler", "config", config)
+
+	var rateLimiter *rate.Limiter = nil
 	if config.RateLimit > 0 {
-		rateLimit = config.RateLimit
+		rateLimiter = rate.NewLimiter(rate.Limit(config.RateLimit), 1)
 	}
 
-	logger.Info("added handler", "rate-limit", rateLimit, "config", config)
+	var taskSemaphore chan struct{}
+	if config.MaxConcurrentTasks > 0 {
+		taskSemaphore = make(chan struct{}, config.MaxConcurrentTasks)
+	}
+
 	tm := &TaskManager{
-		taskName:    name,
-		config:      config,
-		limiter:     rate.NewLimiter(rate.Limit(rateLimit), 1),
-		keyVerifier: keyVerifier,
-		logger:      logger,
+		taskName:           name,
+		config:             config,
+		requestRateLimiter: rateLimiter,
+		taskSemaphore:      taskSemaphore,
+		keyVerifier:        keyVerifier,
+		logger:             logger,
 
 		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -121,26 +129,32 @@ func (tm *TaskManager) authorize(next http.Handler) http.Handler {
 			return
 		}
 
-		if !tm.limiter.Allow() {
-			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-			tm.counterRejection.WithLabelValues("limit_exceeded").Inc()
-			return
-		}
-
 		ctx := context.WithValue(r.Context(), keyNameContextKey, verificationResult.KeyName)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func (tm *TaskManager) taskLock(next http.Handler) http.Handler {
+func (tm *TaskManager) concurrentExecutionLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !tm.taskMutex.TryLock() {
-			http.Error(w, "In progress", http.StatusLocked)
-			tm.counterRejection.WithLabelValues("locked").Inc()
+		select {
+		case tm.taskSemaphore <- struct{}{}:
+			defer func() { <-tm.taskSemaphore }()
+		default:
+			http.Error(w, "Max concurrent tasks reached", http.StatusTooManyRequests)
+			tm.counterRejection.WithLabelValues("max_concurrent").Inc()
 			return
 		}
-		defer tm.taskMutex.Unlock()
 
+		next.ServeHTTP(w, r)
+	})
+}
+func (tm *TaskManager) rateLimiter(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !tm.requestRateLimiter.Allow() {
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			tm.counterRejection.WithLabelValues("limit_exceeded").Inc()
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -273,8 +287,18 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
 	r.Route("/tasks/"+tm.taskName, func(r chi.Router) {
 		r.Use(tm.authorize)
-		r.With(tm.taskLock).Post("/", tm.runTask)
+
 		r.Get("/status/{executionID}", tm.getStatus)
+
+		r.Route("/", func(r chi.Router) {
+			if tm.requestRateLimiter != nil {
+				r.Use(tm.rateLimiter)
+			}
+			if tm.taskSemaphore != nil {
+				r.Use(tm.concurrentExecutionLimiter)
+			}
+			r.Post("/", tm.runTask)
+		})
 	})
 }
 
