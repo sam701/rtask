@@ -135,7 +135,7 @@ func (tm *TaskManager) authorize(next http.Handler) http.Handler {
 func (tm *TaskManager) taskLock(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !tm.taskMutex.TryLock() {
-			http.Error(w, "In progress", http.StatusTooManyRequests)
+			http.Error(w, "In progress", http.StatusLocked)
 			tm.counterRejection.WithLabelValues("locked").Inc()
 			return
 		}
