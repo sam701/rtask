@@ -138,7 +138,11 @@ func (tm *TaskManager) concurrentExecutionLimiter(next http.Handler) http.Handle
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case tm.taskSemaphore <- struct{}{}:
-			defer func() { <-tm.taskSemaphore }()
+			tm.logger.Debug("semaphore enter")
+			defer func() {
+				<-tm.taskSemaphore
+				tm.logger.Debug("semaphore exit")
+			}()
 		default:
 			http.Error(w, "Max concurrent tasks reached", http.StatusTooManyRequests)
 			tm.counterRejection.WithLabelValues("max_concurrent").Inc()
