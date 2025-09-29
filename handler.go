@@ -163,6 +163,19 @@ func (tm *TaskManager) rateLimiter(next http.Handler) http.Handler {
 	})
 }
 
+func (tm *TaskManager) requestTimeout(next http.Handler) http.Handler {
+	executionTimeout := tm.config.ExecutionTimeoutSeconds
+	if executionTimeout <= 0 {
+		executionTimeout = 30
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(executionTimeout)*time.Second)
+		defer cancel()
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -205,15 +218,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	}
 	stdin := http.MaxBytesReader(w, r.Body, maxInputBytes)
 
-	executionTimeout := tm.config.ExecutionTimeoutSeconds
-	if executionTimeout <= 0 {
-		executionTimeout = 30
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(executionTimeout)*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, tm.config.Command[0], tm.config.Command[1:]...)
+	cmd := exec.CommandContext(r.Context(), tm.config.Command[0], tm.config.Command[1:]...)
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = stdin
 	// TODO: set env
@@ -252,7 +257,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 		result.StdErr = truncateString(stderr.String(), int(maxOutput))
 	}
 
-	if ctx.Err() == context.DeadlineExceeded {
+	if r.Context().Err() == context.DeadlineExceeded {
 		result.ExitCode = -1
 		httpStatus = http.StatusRequestTimeout
 		tm.counterRejection.WithLabelValues("timeout").Inc()
@@ -301,6 +306,7 @@ func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
 			if tm.taskSemaphore != nil {
 				r.Use(tm.concurrentExecutionLimiter)
 			}
+			r.Use(tm.requestTimeout)
 			r.Post("/", tm.runTask)
 		})
 	})
