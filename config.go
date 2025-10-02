@@ -17,6 +17,9 @@ type Task struct {
 	Workdir     string
 	APIKeyNames []string
 
+	// Map of user friendly names (appearing in metrics and logs) to paths containing webhook hash.
+	WebhookFiles map[string]string
+
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
 

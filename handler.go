@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
@@ -183,20 +186,35 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
-	r.Route("/tasks/"+tm.taskName, func(r chi.Router) {
-		r.Use(tm.authorize)
+	taskRouter := func(r chi.Router) {
+		if tm.requestRateLimiter != nil {
+			r.Use(tm.rateLimiter)
+		}
+		if tm.taskSemaphore != nil {
+			r.Use(tm.concurrentExecutionLimiter)
+		}
+		r.Use(tm.requestTimeout)
+		r.HandleFunc("/", tm.runTask)
+	}
 
-		r.Route("/", func(r chi.Router) {
-			if tm.requestRateLimiter != nil {
-				r.Use(tm.rateLimiter)
-			}
-			if tm.taskSemaphore != nil {
-				r.Use(tm.concurrentExecutionLimiter)
-			}
-			r.Use(tm.requestTimeout)
-			r.Post("/", tm.runTask)
+	for key, hashPath := range tm.config.WebhookFiles {
+		binaryHash, err := os.ReadFile(hashPath)
+		if err != nil {
+			panic(err)
+		}
+		hash := strings.TrimSpace(string(binaryHash))
+
+		r.With(middleware.WithValue(keyNameContextKey, key)).Route("/wh/"+string(hash), taskRouter)
+		tm.logger.Debug("Configured webhook", "key", key)
+	}
+
+	if tm.config.APIKeyNames != nil {
+		tm.logger.Debug("Configuring API key based route")
+		r.Route("/tasks/"+tm.taskName, func(r chi.Router) {
+			r.Use(tm.authorize)
+			r.Route("/", taskRouter)
 		})
-	})
+	}
 }
 
 type taskExecutionResult struct {
