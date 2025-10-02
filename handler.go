@@ -197,7 +197,7 @@ func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
 		r.HandleFunc("/", tm.runTask)
 	}
 
-	for key, hashPath := range tm.config.WebhookFiles {
+	for key, hashPath := range tm.config.WebhookSecretFiles {
 		binaryHash, err := os.ReadFile(hashPath)
 		if err != nil {
 			panic(err)
