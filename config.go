@@ -20,6 +20,9 @@ type Task struct {
 	// Map of user friendly names (appearing in metrics and logs) to paths containing webhook hash.
 	WebhookSecretFiles map[string]string
 
+	// Environment variables
+	Environment map[string]string
+
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
 

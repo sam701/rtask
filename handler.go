@@ -36,6 +36,7 @@ type TaskManager struct {
 
 	requestRateLimiter *rate.Limiter
 	taskSemaphore      chan struct{}
+	environment        []string
 
 	keyVerifier *KeyVerifier
 	logger      *slog.Logger
@@ -68,6 +69,11 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 		taskSemaphore = make(chan struct{}, config.MaxConcurrentTasks)
 	}
 
+	var env = os.Environ()
+	for k, v := range config.Environment {
+		env = append(env, k+"="+v)
+	}
+
 	tm := &TaskManager{
 		taskName:           name,
 		config:             config,
@@ -75,6 +81,7 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 		taskSemaphore:      taskSemaphore,
 		keyVerifier:        keyVerifier,
 		logger:             logger,
+		environment:        env,
 
 		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -123,6 +130,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	stdin := http.MaxBytesReader(w, r.Body, maxInputBytes)
 
 	cmd := exec.CommandContext(r.Context(), tm.config.Command[0], tm.config.Command[1:]...)
+	cmd.Env = tm.environment
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = stdin
 	// TODO: set env
