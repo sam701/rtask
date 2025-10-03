@@ -69,7 +69,7 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 		taskSemaphore = make(chan struct{}, config.MaxConcurrentTasks)
 	}
 
-	var env = os.Environ()
+	var env = append([]string{}, os.Environ()...)
 	for k, v := range config.Environment {
 		env = append(env, k+"="+v)
 	}
@@ -113,6 +113,19 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
+func sanitizeEnvVarName(s string) string {
+	var result strings.Builder
+	result.Grow(len(s))
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('_')
+		}
+	}
+	return strings.ToUpper(result.String())
+}
+
 func (tm *TaskManager) generateExecutionID() string {
 	bytes := make([]byte, 8)
 	rand.Read(bytes)
@@ -130,7 +143,15 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	stdin := http.MaxBytesReader(w, r.Body, maxInputBytes)
 
 	cmd := exec.CommandContext(r.Context(), tm.config.Command[0], tm.config.Command[1:]...)
-	cmd.Env = tm.environment
+	env := tm.environment
+	if tm.config.PassRequestHeaders != nil {
+		env = append([]string{}, tm.environment...)
+		for _, h := range tm.config.PassRequestHeaders {
+			values := r.Header.Values(h)
+			env = append(env, "REQUEST_HEADER_"+sanitizeEnvVarName(h)+"="+strings.Join(values, ","))
+		}
+	}
+	cmd.Env = env
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = stdin
 	// TODO: set env

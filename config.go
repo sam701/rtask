@@ -23,6 +23,10 @@ type Task struct {
 	// Environment variables
 	Environment map[string]string
 
+	// The specified request headers will be passed to the process as REQUEST_HEADER_<name> envvar,
+	// where the <name> is in uppercase and all disallowed characters are replaced by underscores.
+	PassRequestHeaders []string
+
 	// If true, the handler will pipe stdout and stderr to the response body
 	Blocking bool
 
