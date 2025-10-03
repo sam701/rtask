@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,7 +24,7 @@ import (
 
 const (
 	labelAPIKeyUsed = "api_key_used"
-	labelStatus     = "status"
+	labelExitCode   = "exit_code"
 )
 
 type contextKey string
@@ -85,14 +86,12 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 
 		histTaskDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "task_duration_seconds",
-				Help:    "Duration of task execution",
-				Buckets: config.DurationHistogramBuckets,
-				ConstLabels: prometheus.Labels{
-					"handler": name,
-				},
+				Name:        "task_duration_seconds",
+				Help:        "Duration of task execution",
+				Buckets:     config.DurationHistogramBuckets,
+				ConstLabels: prometheus.Labels{"handler": name},
 			},
-			[]string{labelAPIKeyUsed, labelStatus},
+			[]string{labelAPIKeyUsed, labelExitCode},
 		),
 		counterRejection: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "task_rejection_total",
@@ -172,7 +171,6 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
-	status := "success"
 	httpStatus := http.StatusOK
 	maxOutput := tm.config.MaxOutputBytes
 	if maxOutput <= 0 {
@@ -194,10 +192,8 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 		result.ExitCode = -1
 		httpStatus = http.StatusRequestTimeout
 		tm.counterRejection.WithLabelValues("timeout").Inc()
-		status = "timeout"
 	} else if err != nil {
 		tm.logger.Warn("failed to run the task", "error", err)
-		status = "failure"
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
 				result.ExitCode = waitStatus.ExitStatus()
@@ -206,8 +202,8 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyName := r.Context().Value(keyNameContextKey).(string)
-	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
-	tm.logger.Info("done", "status", status, "stdout", result.StdOut, "stderr", result.StdErr)
+	tm.histTaskDuration.WithLabelValues(keyName, strconv.Itoa(result.ExitCode)).Observe(float64(duration.Seconds()))
+	tm.logger.Info("done", "stdout", result.StdOut, "stderr", result.StdErr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
