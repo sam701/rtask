@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -125,14 +123,7 @@ func sanitizeEnvVarName(s string) string {
 	return strings.ToUpper(result.String())
 }
 
-func (tm *TaskManager) generateExecutionID() string {
-	bytes := make([]byte, 8)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)
-}
-
 func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
-	executionID := tm.generateExecutionID()
 	startTime := time.Now()
 
 	maxInputBytes := tm.config.MaxInputBytes
@@ -175,10 +166,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	if maxOutput <= 0 {
 		maxOutput = 16 * 1024
 	}
-	result := &taskExecutionResult{
-		TaskID:   executionID,
-		ExitCode: 0,
-	}
+	result := &taskExecutionResult{ExitCode: 0}
 
 	if redirect {
 		result.StdOut = truncateString(stdout.String(), int(maxOutput))
@@ -219,15 +207,21 @@ func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
 		r.HandleFunc("/", tm.runTask)
 	}
 
+	webhookRouter := func(key, hash string) {
+		r.With(middleware.WithValue(keyNameContextKey, key)).Route("/wh/"+string(hash), taskRouter)
+		tm.logger.Debug("Configured webhook", "key", key)
+	}
+
+	for key, hash := range tm.config.WebhookSecrets {
+		webhookRouter(key, hash)
+	}
 	for key, hashPath := range tm.config.WebhookSecretFiles {
 		binaryHash, err := os.ReadFile(hashPath)
 		if err != nil {
 			panic(err)
 		}
 		hash := strings.TrimSpace(string(binaryHash))
-
-		r.With(middleware.WithValue(keyNameContextKey, key)).Route("/wh/"+string(hash), taskRouter)
-		tm.logger.Debug("Configured webhook", "key", key)
+		webhookRouter(key, hash)
 	}
 
 	if tm.config.APIKeyNames != nil {
@@ -240,7 +234,6 @@ func (tm *TaskManager) ConfigureRoutes(r chi.Router) {
 }
 
 type taskExecutionResult struct {
-	TaskID   string `json:"task_id"`
 	ExitCode int    `json:"exit_code"`
 	StdOut   string `json:"stdout,omitempty"`
 	StdErr   string `json:"stderr,omitempty"`

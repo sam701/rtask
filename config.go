@@ -17,6 +17,9 @@ type Task struct {
 	Workdir     string
 	APIKeyNames []string
 
+	// Map of user friendly names (appearing in metrics and logs) to webhook hashes.
+	WebhookSecrets map[string]string
+
 	// Map of user friendly names (appearing in metrics and logs) to paths containing webhook hash.
 	WebhookSecretFiles map[string]string
 
