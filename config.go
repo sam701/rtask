@@ -33,6 +33,7 @@ type Task struct {
 	MaxInputBytes  int64
 	MaxOutputBytes int64
 
+	// If the task exceeds the provided execution timeout, it will be killed and the exit_code will be set to -1.
 	ExecutionTimeoutSeconds int64
 
 	// If true, stderr is redirected to stdout. Default true

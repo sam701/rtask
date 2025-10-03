@@ -171,7 +171,6 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
-	httpStatus := http.StatusOK
 	maxOutput := tm.config.MaxOutputBytes
 	if maxOutput <= 0 {
 		maxOutput = 16 * 1024
@@ -190,10 +189,9 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 
 	if r.Context().Err() == context.DeadlineExceeded {
 		result.ExitCode = -1
-		httpStatus = http.StatusRequestTimeout
-		tm.counterRejection.WithLabelValues("timeout").Inc()
 	} else if err != nil {
 		tm.logger.Warn("failed to run the task", "error", err)
+		result.ExitCode = -2
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
 				result.ExitCode = waitStatus.ExitStatus()
@@ -206,7 +204,6 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	tm.logger.Info("done", "stdout", result.StdOut, "stderr", result.StdErr)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(httpStatus)
 	json.NewEncoder(w).Encode(result)
 }
 
