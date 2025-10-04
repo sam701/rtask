@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,7 +21,7 @@ import (
 
 const (
 	labelAPIKeyUsed = "api_key_used"
-	labelExitCode   = "exit_code"
+	labelStatus     = "status"
 )
 
 type contextKey string
@@ -89,7 +88,7 @@ func NewTaskManager(name string, config *Task, keyStore *APIKeyStore) (*TaskMana
 				Buckets:     config.DurationHistogramBuckets,
 				ConstLabels: prometheus.Labels{"handler": name},
 			},
-			[]string{labelAPIKeyUsed, labelExitCode},
+			[]string{labelAPIKeyUsed, labelStatus},
 		),
 		counterRejection: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "task_rejection_total",
@@ -175,9 +174,12 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 		result.StdErr = truncateString(stderr.String(), int(maxOutput))
 	}
 
+	status := "success"
 	if r.Context().Err() == context.DeadlineExceeded {
+		status = "timeout"
 		result.ExitCode = -1
 	} else if err != nil {
+		status = "failure"
 		tm.logger.Warn("failed to run the task", "error", err)
 		result.ExitCode = -2
 		if exitError, ok := err.(*exec.ExitError); ok {
@@ -188,7 +190,7 @@ func (tm *TaskManager) runTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyName := r.Context().Value(keyNameContextKey).(string)
-	tm.histTaskDuration.WithLabelValues(keyName, strconv.Itoa(result.ExitCode)).Observe(float64(duration.Seconds()))
+	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
 	tm.logger.Info("done", "stdout", result.StdOut, "stderr", result.StdErr)
 
 	w.Header().Set("Content-Type", "application/json")
