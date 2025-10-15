@@ -5,7 +5,6 @@ go 1.24.3
 require (
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/lmittmann/tint v1.1.1
-	github.com/rs/xid v1.6.0
 	github.com/urfave/cli/v3 v3.3.8
 	golang.org/x/crypto v0.40.0
 )

@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base32"
 	"strings"
-
-	"github.com/rs/xid"
 )
 
 func truncateString(s string, maxLen int) string {
@@ -56,6 +56,14 @@ func sanitizeEnvVarName(s string) string {
 
 type TaskID = string
 
+var taskIDEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
 func newTaskID() TaskID {
-	return xid.New().String()
+	// Generate 10 random bytes (80 bits of entropy)
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // unreachable
+	}
+
+	return taskIDEncoding.EncodeToString(b)
 }
