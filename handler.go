@@ -30,11 +30,30 @@ type contextKey string
 const keyNameContextKey contextKey = "keyName"
 
 type taskContext struct {
-	id     TaskID
+	taskID TaskID
 	ctx    context.Context
 	stdin  io.Reader
 	env    []string
 	result *taskExecutionResult
+	logger *slog.Logger
+}
+
+func NewTaskContext(tm *TaskManager, w http.ResponseWriter, r *http.Request) *taskContext {
+	maxInputBytes := tm.config.MaxInputBytes
+	if maxInputBytes <= 0 {
+		maxInputBytes = 16 * 1024
+	}
+	input := http.MaxBytesReader(w, r.Body, maxInputBytes)
+
+	taskID := newTaskID()
+	return &taskContext{
+		taskID: taskID,
+		ctx:    r.Context(),
+		stdin:  input,
+		env:    tm.getEnv(r),
+		result: &taskExecutionResult{Status: "running", ExitCode: -1},
+		logger: tm.logger.With("taskID", taskID),
+	}
 }
 
 type taskExecutionResult struct {
@@ -153,19 +172,7 @@ func (tm *TaskManager) getTaskResult(w http.ResponseWriter, r *http.Request) {
 func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	maxInputBytes := tm.config.MaxInputBytes
-	if maxInputBytes <= 0 {
-		maxInputBytes = 16 * 1024
-	}
-	input := http.MaxBytesReader(w, r.Body, maxInputBytes)
-
-	ctx := &taskContext{
-		id:     newTaskID(),
-		ctx:    r.Context(),
-		stdin:  input,
-		env:    tm.getEnv(r),
-		result: &taskExecutionResult{Status: "running", ExitCode: -1},
-	}
+	ctx := NewTaskContext(tm, w, r)
 
 	// == rate limiter
 	if tm.requestRateLimiter != nil {
@@ -181,16 +188,16 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	if tm.taskSemaphore != nil {
 		select {
 		case tm.taskSemaphore <- struct{}{}:
-			tm.logger.Debug("semaphore acquired", "blocking", tm.config.Blocking)
+			ctx.logger.Debug("semaphore acquired", "blocking", tm.config.Blocking)
 
 			defer func() {
 				if tm.config.Blocking {
 					<-tm.taskSemaphore
-					tm.logger.Debug("semaphore released", "blocking", tm.config.Blocking)
+					ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking)
 				} else {
 					if err != nil {
 						<-tm.taskSemaphore
-						tm.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err)
+						ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err)
 					}
 				}
 			}()
@@ -208,7 +215,7 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ctx.result)
 	} else {
 		var bb []byte
-		bb, err = io.ReadAll(input)
+		bb, err = io.ReadAll(ctx.stdin)
 		if err != nil {
 			http.Error(w, "Invalid content", http.StatusBadRequest)
 			tm.counterRejection.WithLabelValues("invalid_content").Inc()
@@ -222,16 +229,16 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			// Release semaphore
 			defer func() {
 				<-tm.taskSemaphore
-				tm.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err, "goroutine", true)
+				ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err, "goroutine", true)
 			}()
 
 			// Register task ID
 			tm.taskRunsMutex.Lock()
-			tm.taskRuns[ctx.id] = ctx.result
+			tm.taskRuns[ctx.taskID] = ctx.result
 			tm.taskRunsMutex.Unlock()
 			defer func() {
-				time.AfterFunc(20*time.Second, func() {
-					tm.cleanupTask(ctx.id)
+				time.AfterFunc(1*time.Minute, func() {
+					tm.cleanupTask(ctx)
 				})
 			}()
 
@@ -239,21 +246,21 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"task_id": ctx.id})
+		json.NewEncoder(w).Encode(map[string]string{"task_id": ctx.taskID})
 	}
 }
 
-func (tm *TaskManager) cleanupTask(taskID TaskID) {
+func (tm *TaskManager) cleanupTask(ctx *taskContext) {
 	tm.taskRunsMutex.Lock()
-	delete(tm.taskRuns, taskID)
+	delete(tm.taskRuns, ctx.taskID)
 	remaining := len(tm.taskRuns)
 	tm.taskRunsMutex.Unlock()
 
-	tm.logger.Debug("removed async task result", "task_id", taskID, "remaining_tasks", remaining)
+	ctx.logger.Debug("removed async task result", "task_id", ctx.taskID, "remaining_tasks", remaining)
 }
 
 func (tm *TaskManager) runTask(taskCtx *taskContext) {
-	tm.logger.Debug("starting task")
+	taskCtx.logger.Debug("starting task")
 	startTime := time.Now()
 
 	// == timeout
@@ -296,9 +303,10 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 	if taskCtx.ctx.Err() == context.DeadlineExceeded {
 		status = "timeout"
 		taskCtx.result.ExitCode = -1
+		taskCtx.logger.Warn("timeout")
 	} else if err != nil {
 		status = "failure"
-		tm.logger.Warn("failed to run the task", "error", err)
+		taskCtx.logger.Warn("failed to run the task", "error", err)
 		taskCtx.result.ExitCode = -2
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if waitStatus, ok := exitError.Sys().(syscall.WaitStatus); ok {
@@ -310,5 +318,5 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 
 	keyName := taskCtx.ctx.Value(keyNameContextKey).(string)
 	tm.histTaskDuration.WithLabelValues(keyName, status).Observe(float64(duration.Seconds()))
-	tm.logger.Info("done", "stdout", taskCtx.result.StdOut, "stderr", taskCtx.result.StdErr)
+	taskCtx.logger.Info("done", "stdout", taskCtx.result.StdOut, "stderr", taskCtx.result.StdErr)
 }
