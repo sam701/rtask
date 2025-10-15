@@ -39,8 +39,6 @@ RTask uses TOML configuration files to define tasks and API key settings.
 ### Main Configuration (`config.toml`)
 
 ```toml
-apiKeysFile = "./api-keys.toml"
-
 [tasks.hello]
 command = ["./test.nu"]
 apiKeyNames = ["a1", "a3"]
@@ -53,14 +51,35 @@ workdir = "/path/to/project"
 apiKeyNames = ["github-action"]
 blocking = false
 rateLimit = 0.5
+maxConcurrentTasks = 2
+executionTimeoutSeconds = 300
+
+[tasks.webhook-handler]
+command = ["/usr/local/bin/process-webhook.sh"]
+blocking = false
+passRequestHeaders = ["X-GitHub-Event", "X-Hub-Signature"]
+
+[tasks.webhook-handler.webhookSecrets]
+github = "your-webhook-secret-hash"
+
+[tasks.webhook-handler.webhookSecretFiles]
+gitlab = "/etc/rtask/gitlab-webhook-secret"
+
+[tasks.webhook-handler.environment]
+LOG_LEVEL = "info"
+WEBHOOK_TIMEOUT = "30"
 ```
 
 ### Task Configuration Options
 
 - `command`: Array of command and arguments to execute
 - `workdir`: Working directory for command execution (optional)
-- `apiKeyNames`: List of API key names that can access this task
-- `blocking`: If true, streams stdout/stderr to HTTP response; if false, runs asynchronously
+- `apiKeyNames`: List of API key names that can access this task via `/tasks/{task-name}` endpoint
+- `webhookSecrets`: Map of user-friendly names to webhook secret hashes for webhook authentication
+- `webhookSecretFiles`: Map of user-friendly names to file paths containing webhook secret hashes
+- `environment`: Map of environment variables to pass to the task
+- `passRequestHeaders`: List of HTTP request headers to pass as environment variables (e.g., `X-Custom-Header` becomes `REQUEST_HEADER_X_CUSTOM_HEADER`)
+- `blocking`: If true, waits for task completion and returns result immediately; if false, returns task ID and runs asynchronously
 - `rateLimit`: Requests per second (default: 0 = unlimited)
 - `maxConcurrentTasks`: Maximum number of concurrent task executions (default: 0 = unlimited)
 - `maxInputBytes`: Maximum input size in bytes (default: 16KB)
@@ -92,14 +111,59 @@ This will output an API key that can be used to authenticate requests.
 
 ### Making Requests
 
-Send HTTP requests to task endpoints with Bearer authentication:
+#### Blocking Tasks
+
+For tasks configured with `blocking = true`, the response contains the execution result:
 
 ```bash
-# Execute a task
 curl -X POST \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d "input data" \
   http://localhost:8800/tasks/hello
+
+# Response:
+# {
+#   "status": "success",
+#   "exit_code": 0,
+#   "stdout": "task output",
+#   "stderr": ""
+# }
+```
+
+#### Async Tasks
+
+For tasks configured with `blocking = false`, you receive a task ID immediately:
+
+```bash
+# Submit task
+curl -X POST \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d "input data" \
+  http://localhost:8800/tasks/build
+
+# Response: {"task_id": "kj4w2ndvmfzxg2lk"}
+
+# Poll for result
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:8800/tasks/build/kj4w2ndvmfzxg2lk
+
+# Response when complete:
+# {
+#   "status": "success",
+#   "exit_code": 0,
+#   "stdout": "build output",
+#   "stderr": ""
+# }
+```
+
+#### Webhooks
+
+For tasks configured with webhooks, no API key is required:
+
+```bash
+curl -X POST \
+  -d "webhook payload" \
+  http://localhost:8800/wh/your-webhook-hash
 ```
 
 ### Monitoring
@@ -116,7 +180,23 @@ Available metrics:
 
 ## API Endpoints
 
-- `POST /tasks/{task-name}`: Execute the specified task
+### Task Execution
+
+- `POST /tasks/{task-name}`: Execute the specified task with API key authentication
+  - **Blocking mode**: Returns task execution result immediately
+  - **Async mode**: Returns `{"task_id": "..."}` immediately
+- `GET /tasks/{task-name}/{task-id}`: Retrieve async task result by task ID
+  - Returns `404` if task not found (never existed or cleaned up after retention period)
+  - Task results are retained for a configurable period after completion (default: 20 seconds)
+
+### Webhooks
+
+- `POST /wh/{webhook-hash}`: Execute task via webhook (no API key required)
+  - Webhook hash is derived from `webhookSecrets` or `webhookSecretFiles` configuration
+  - Key name is automatically set in the context for metrics
+
+### Monitoring
+
 - `GET /metrics`: Prometheus metrics endpoint
 
 ## Security Features
