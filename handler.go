@@ -39,11 +39,7 @@ type taskContext struct {
 }
 
 func NewTaskContext(tm *TaskManager, w http.ResponseWriter, r *http.Request) *taskContext {
-	maxInputBytes := tm.config.MaxInputBytes
-	if maxInputBytes <= 0 {
-		maxInputBytes = 16 * 1024
-	}
-	input := http.MaxBytesReader(w, r.Body, maxInputBytes)
+	input := http.MaxBytesReader(w, r.Body, tm.config.MaxInputBytes)
 
 	taskID := newTaskID()
 	return &taskContext{
@@ -265,12 +261,8 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 	startTime := time.Now()
 
 	// == timeout
-	executionTimeout := tm.config.ExecutionTimeoutSeconds
-	if executionTimeout <= 0 {
-		executionTimeout = 30
-	}
 	var cancel context.CancelFunc
-	taskCtx.ctx, cancel = context.WithTimeout(taskCtx.ctx, time.Duration(executionTimeout)*time.Second)
+	taskCtx.ctx, cancel = context.WithTimeout(taskCtx.ctx, time.Duration(tm.config.ExecutionTimeoutSeconds)*time.Second)
 	defer cancel()
 
 	// == exec
@@ -279,18 +271,12 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 	cmd.Dir = tm.config.Workdir
 	cmd.Stdin = taskCtx.stdin
 
-	maxOutput := tm.config.MaxOutputBytes
-	if maxOutput <= 0 {
-		maxOutput = 16 * 1024
-	}
-	limitedStdout := &OutputCollector{MaxRemaining: maxOutput}
-	limitedStderr := &OutputCollector{MaxRemaining: maxOutput}
+	limitedStdout := &OutputCollector{MaxRemaining: tm.config.MaxOutputBytes}
+	limitedStderr := &OutputCollector{MaxRemaining: tm.config.MaxOutputBytes}
 
-	// RedirectStderr defaults to true, so redirect stderr to stdout unless explicitly set to false
-	redirect := tm.config.RedirectStderr == nil || *tm.config.RedirectStderr
 	cmd.Stdout = limitedStdout
 	cmd.Stderr = limitedStderr
-	if redirect {
+	if tm.config.MergeStderr {
 		cmd.Stderr = limitedStdout
 	}
 

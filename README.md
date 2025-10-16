@@ -85,7 +85,7 @@ WEBHOOK_TIMEOUT = "30"
 - `maxInputBytes`: Maximum input size in bytes (default: 16KB)
 - `maxOutputBytes`: Maximum output size in bytes (default: 16KB)
 - `executionTimeoutSeconds`: Task execution timeout in seconds (default: 30)
-- `redirectStderr`: If true, redirects stderr to stdout (default: true)
+- `mergeStderr`: If true, merge stderr into stdout (default: false, keep separate)
 - `durationHistogramBuckets`: Custom histogram buckets for task duration metrics
 
 ## Usage
