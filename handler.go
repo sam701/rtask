@@ -243,7 +243,8 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			tm.taskRuns[ctx.taskID] = ctx.result
 			tm.taskRunsMutex.Unlock()
 			defer func() {
-				time.AfterFunc(1*time.Minute, func() {
+				retentionDuration := time.Duration(tm.config.AsyncResultRetentionSeconds) * time.Second
+				time.AfterFunc(retentionDuration, func() {
 					tm.cleanupTask(ctx)
 				})
 			}()

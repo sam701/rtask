@@ -52,6 +52,7 @@ command = ["make", "build"]
 workdir = "/path/to/project"
 apiKeyNames = ["github-action"]
 async = true
+asyncResultRetentionSeconds = 120  # Keep results for 2 minutes
 rateLimit = 0.5
 maxConcurrentTasks = 2
 executionTimeoutSeconds = 300
@@ -82,6 +83,7 @@ WEBHOOK_TIMEOUT = "30"
 - `environment`: Map of environment variables to pass to the task
 - `passRequestHeaders`: List of HTTP request headers to pass as environment variables (e.g., `X-Custom-Header` becomes `REQUEST_HEADER_X_CUSTOM_HEADER`)
 - `async`: If true, returns task ID immediately and runs in background; if false, waits for completion and returns result
+- `asyncResultRetentionSeconds`: How long to keep async task results before cleanup in seconds (default: 60)
 - `rateLimit`: Requests per second (default: 0 = unlimited)
 - `maxConcurrentTasks`: Maximum number of concurrent task executions (default: 0 = unlimited)
 - `maxInputBytes`: Maximum input size in bytes (default: 16KB)
@@ -189,7 +191,8 @@ Available metrics:
   - **Async mode** (`async = true`): Returns `{"task_id": "..."}` immediately
 - `GET /tasks/{task-name}/{task-id}`: Retrieve async task result by task ID
   - Returns `404` if task not found (never existed or cleaned up after retention period)
-  - Task results are retained for a configurable period after completion (default: 20 seconds)
+  - Task results are retained for a configurable period after completion (default: 60 seconds)
+  - Configure retention with `asyncResultRetentionSeconds` in task config
 
 ### Webhooks
 

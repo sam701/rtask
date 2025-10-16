@@ -51,6 +51,9 @@ type Task struct {
 
 	// Maximum number of concurrent task executions. Default 0 = unlimited
 	MaxConcurrentTasks int
+
+	// How long to keep async task results before cleanup (in seconds). Default 60 (1 minute)
+	AsyncResultRetentionSeconds int64
 }
 
 // applyDefaults sets default values for unspecified configuration options
@@ -65,6 +68,10 @@ func (t *Task) applyDefaults() {
 
 	if t.ExecutionTimeoutSeconds <= 0 {
 		t.ExecutionTimeoutSeconds = 30
+	}
+
+	if t.AsyncResultRetentionSeconds <= 0 {
+		t.AsyncResultRetentionSeconds = 60
 	}
 }
 

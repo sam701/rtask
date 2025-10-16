@@ -482,8 +482,11 @@ func TestMaxConcurrentTasks_Async(t *testing.T) {
 	t.Logf("Async results: %d accepted, %d rejected", accepted, rejected)
 
 	// With async and semaphore, we should accept some and reject others
-	if rejected < 1 {
-		t.Errorf("Expected at least 1 rejection with MaxConcurrentTasks=2, got %d", rejected)
+	if rejected != 8 {
+		t.Errorf("Expected 8 rejections with MaxConcurrentTasks=2, got %d", rejected)
+	}
+	if accepted != 2 {
+		t.Errorf("Expected 8 accepts with MaxConcurrentTasks=2, got %d", rejected)
 	}
 }
 
@@ -703,5 +706,78 @@ func TestMissingAPIKey(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Expected status 401, got %d", w.Code)
+	}
+}
+
+// Test: Async task result cleanup
+func TestAsyncTask_Cleanup(t *testing.T) {
+	store, apiKey := createTestKeyStore(t)
+
+	tasks := map[string]Task{
+		"cleanup-test": {
+			Command:                     []string{getTestScriptPath(t, "fast_task.sh")},
+			APIKeyNames:                 []string{"test-key"},
+			Async:                       true,
+			ExecutionTimeoutSeconds:     5,
+			AsyncResultRetentionSeconds: 2, // 2 seconds retention for faster testing
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	// Submit async task
+	req := httptest.NewRequest("POST", "/tasks/cleanup-test", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var submitResponse map[string]string
+	json.NewDecoder(w.Body).Decode(&submitResponse)
+	taskID := submitResponse["task_id"]
+
+	if taskID == "" {
+		t.Fatal("Expected task_id in response")
+	}
+
+	// Wait for task to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Task result should be available immediately after completion
+	req = httptest.NewRequest("GET", "/tasks/cleanup-test/"+taskID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected result to be available, got status %d", w.Code)
+	}
+
+	var result taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result)
+	if result.Status != "success" {
+		t.Errorf("Expected status 'success', got '%s'", result.Status)
+	}
+
+	// Wait for cleanup (2 seconds retention + 500ms buffer)
+	time.Sleep(2500 * time.Millisecond)
+
+	// Task result should be cleaned up
+	req = httptest.NewRequest("GET", "/tasks/cleanup-test/"+taskID, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 after cleanup, got %d", w.Code)
+	}
+
+	var errorResponse map[string]string
+	json.NewDecoder(w.Body).Decode(&errorResponse)
+	if errorResponse["error"] != "task not found" {
+		t.Errorf("Expected 'task not found' error, got '%s'", errorResponse["error"])
 	}
 }
