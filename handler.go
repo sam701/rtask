@@ -218,17 +218,18 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Read and validate input for both async and sync cases
+	var bb []byte
+	bb, err = io.ReadAll(ctx.stdin)
+	if err != nil {
+		http.Error(w, "Invalid content", http.StatusBadRequest)
+		tm.counterRejection.WithLabelValues("invalid_content").Inc()
+		return
+	}
+	ctx.stdin = bytes.NewReader(bb)
+
 	// == async / synchronous
 	if tm.config.Async {
-		var bb []byte
-		bb, err = io.ReadAll(ctx.stdin)
-		if err != nil {
-			http.Error(w, "Invalid content", http.StatusBadRequest)
-			tm.counterRejection.WithLabelValues("invalid_content").Inc()
-			return
-		}
-		ctx.stdin = bytes.NewReader(bb)
-
 		// Copy key name
 		ctx.ctx = context.WithValue(context.Background(), keyNameContextKey, ctx.ctx.Value(keyNameContextKey))
 		go func() {

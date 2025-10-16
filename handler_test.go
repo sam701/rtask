@@ -781,3 +781,222 @@ func TestAsyncTask_Cleanup(t *testing.T) {
 		t.Errorf("Expected 'task not found' error, got '%s'", errorResponse["error"])
 	}
 }
+
+// Test: MergeStderr configuration
+func TestTask_MergeStderr(t *testing.T) {
+	store, apiKey := createTestKeyStore(t)
+
+	tasks := map[string]Task{
+		"merge-stderr-false": {
+			Command:                 []string{getTestScriptPath(t, "stderr_test.sh")},
+			APIKeyNames:             []string{"test-key"},
+			Async:                   false,
+			MergeStderr:             false, // Keep separate
+			ExecutionTimeoutSeconds: 5,
+		},
+		"merge-stderr-true": {
+			Command:                 []string{getTestScriptPath(t, "stderr_test.sh")},
+			APIKeyNames:             []string{"test-key"},
+			Async:                   false,
+			MergeStderr:             true, // Merge into stdout
+			ExecutionTimeoutSeconds: 5,
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	// Test with MergeStderr = false (separate streams)
+	req := httptest.NewRequest("POST", "/tasks/merge-stderr-false", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var result1 taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result1)
+
+	if !strings.Contains(result1.StdOut, "This is stdout") {
+		t.Errorf("Expected stdout to contain 'This is stdout', got '%s'", result1.StdOut)
+	}
+	if !strings.Contains(result1.StdErr, "This is stderr") {
+		t.Errorf("Expected stderr to contain 'This is stderr', got '%s'", result1.StdErr)
+	}
+	if strings.Contains(result1.StdOut, "This is stderr") {
+		t.Errorf("stderr should not be in stdout when MergeStderr=false")
+	}
+
+	// Test with MergeStderr = true (merged into stdout)
+	req = httptest.NewRequest("POST", "/tasks/merge-stderr-true", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var result2 taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result2)
+
+	if !strings.Contains(result2.StdOut, "This is stdout") {
+		t.Errorf("Expected stdout to contain 'This is stdout', got '%s'", result2.StdOut)
+	}
+	if !strings.Contains(result2.StdOut, "This is stderr") {
+		t.Errorf("Expected stderr to be merged into stdout, got '%s'", result2.StdOut)
+	}
+	if result2.StdErr != "" {
+		t.Errorf("Expected stderr to be empty when MergeStderr=true, got '%s'", result2.StdErr)
+	}
+}
+
+// Test: MaxInputBytes limit
+func TestTask_MaxInputBytes(t *testing.T) {
+	store, apiKey := createTestKeyStore(t)
+
+	tasks := map[string]Task{
+		"limited-input": {
+			Command:                 []string{getTestScriptPath(t, "echo_stdin.sh")},
+			APIKeyNames:             []string{"test-key"},
+			Async:                   false,
+			MaxInputBytes:           10, // Only 10 bytes allowed
+			ExecutionTimeoutSeconds: 5,
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	// Test with input within limit
+	smallInput := "small"
+	req := httptest.NewRequest("POST", "/tasks/limited-input", strings.NewReader(smallInput))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for small input, got %d", w.Code)
+	}
+
+	// Test with input exceeding limit
+	largeInput := strings.Repeat("x", 100)
+	req = httptest.NewRequest("POST", "/tasks/limited-input", strings.NewReader(largeInput))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for large input, got %d", w.Code)
+	}
+}
+
+// Test: MaxOutputBytes limit
+func TestTask_MaxOutputBytes(t *testing.T) {
+	store, apiKey := createTestKeyStore(t)
+
+	tasks := map[string]Task{
+		"limited-output": {
+			Command:                 []string{getTestScriptPath(t, "large_output.sh")},
+			APIKeyNames:             []string{"test-key"},
+			Async:                   false,
+			MaxOutputBytes:          50, // Only 50 bytes
+			ExecutionTimeoutSeconds: 5,
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	req := httptest.NewRequest("POST", "/tasks/limited-output", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var result taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result)
+
+	// Output should be truncated to MaxOutputBytes
+	if len(result.StdOut) > 50 {
+		t.Errorf("Expected stdout to be truncated to 50 bytes, got %d bytes", len(result.StdOut))
+	}
+}
+
+// Test: WebhookSecrets
+func TestTask_WebhookSecrets(t *testing.T) {
+	store, _ := createTestKeyStore(t)
+
+	webhookHash := "test-webhook-hash-123"
+
+	tasks := map[string]Task{
+		"webhook-task": {
+			Command:                 []string{getTestScriptPath(t, "fast_task.sh")},
+			Async:                   false,
+			WebhookSecrets:          map[string]string{"webhook1": webhookHash},
+			ExecutionTimeoutSeconds: 5,
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	// Test webhook without API key (should work)
+	req := httptest.NewRequest("POST", "/wh/"+webhookHash, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for webhook, got %d", w.Code)
+	}
+
+	var result taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result.Status != "success" {
+		t.Errorf("Expected status 'success', got '%s'", result.Status)
+	}
+
+	// Test with wrong webhook hash (should 404)
+	req = httptest.NewRequest("POST", "/wh/wrong-hash", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 for wrong webhook hash, got %d", w.Code)
+	}
+}
+
+// Test: WebhookSecretFiles
+func TestTask_WebhookSecretFiles(t *testing.T) {
+	store, _ := createTestKeyStore(t)
+
+	// Create a temporary file with webhook hash
+	tempDir := t.TempDir()
+	webhookFile := tempDir + "/webhook-secret"
+	webhookHash := "file-webhook-hash-456"
+	err := os.WriteFile(webhookFile, []byte(webhookHash+"\n"), 0600)
+	if err != nil {
+		t.Fatalf("Failed to create webhook file: %v", err)
+	}
+
+	tasks := map[string]Task{
+		"webhook-file-task": {
+			Command:                 []string{getTestScriptPath(t, "fast_task.sh")},
+			Async:                   false,
+			WebhookSecretFiles:      map[string]string{"webhook2": webhookFile},
+			ExecutionTimeoutSeconds: 5,
+		},
+	}
+
+	router := createTestRouter(t, tasks, store)
+
+	// Test webhook from file (should work)
+	req := httptest.NewRequest("POST", "/wh/"+webhookHash, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for webhook from file, got %d", w.Code)
+	}
+
+	var result taskExecutionResult
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result.Status != "success" {
+		t.Errorf("Expected status 'success', got '%s'", result.Status)
+	}
+}

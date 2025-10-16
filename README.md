@@ -24,7 +24,7 @@ RTask is a secure task runner with API key management that exposes system comman
 
 ```bash
 git clone <repository-url>
-cd rtask.go
+cd rtask
 go build
 ```
 
@@ -61,12 +61,8 @@ executionTimeoutSeconds = 300
 command = ["/usr/local/bin/process-webhook.sh"]
 async = true
 passRequestHeaders = ["X-GitHub-Event", "X-Hub-Signature"]
-
-[tasks.webhook-handler.webhookSecrets]
-github = "your-webhook-secret-hash"
-
-[tasks.webhook-handler.webhookSecretFiles]
-gitlab = "/etc/rtask/gitlab-webhook-secret"
+webhookSecrets.github = "your-webhook-secret-hash"
+webhookSecretFiles.gitlab = "/etc/rtask/gitlab-webhook-secret"
 
 [tasks.webhook-handler.environment]
 LOG_LEVEL = "info"
