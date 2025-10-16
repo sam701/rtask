@@ -1,6 +1,10 @@
 build:
   go build
 
+# Build optimized binary for releases (respects GOOS and GOARCH env vars)
+build-release:
+  go build -ldflags="-s -w" -trimpath
+
 run *args: build
   GO_LOG=debug ./rtask {{args}}
 
