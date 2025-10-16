@@ -53,10 +53,22 @@ func NewTaskContext(tm *TaskManager, w http.ResponseWriter, r *http.Request) *ta
 }
 
 type taskExecutionResult struct {
-	Status   string `json:"status,omitempty"`
-	ExitCode int    `json:"exit_code"`
-	StdOut   string `json:"stdout,omitempty"`
-	StdErr   string `json:"stderr,omitempty"`
+	mu       sync.RWMutex `json:"-"`
+	Status   string       `json:"status,omitempty"`
+	ExitCode int          `json:"exit_code"`
+	StdOut   string       `json:"stdout,omitempty"`
+	StdErr   string       `json:"stderr,omitempty"`
+}
+
+func (r *taskExecutionResult) copy() taskExecutionResult {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return taskExecutionResult{
+		Status:   r.Status,
+		ExitCode: r.ExitCode,
+		StdOut:   r.StdOut,
+		StdErr:   r.StdErr,
+	}
 }
 
 type TaskManager struct {
@@ -158,7 +170,9 @@ func (tm *TaskManager) getTaskResult(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if exists {
-		json.NewEncoder(w).Encode(result)
+		// Copy the result using thread-safe copy method
+		resultCopy := result.copy()
+		json.NewEncoder(w).Encode(&resultCopy)
 	} else {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{"error": "task not found"})
@@ -282,6 +296,10 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 
 	err := cmd.Run()
 	duration := time.Since(startTime)
+
+	// Lock the result for all updates
+	taskCtx.result.mu.Lock()
+	defer taskCtx.result.mu.Unlock()
 
 	taskCtx.result.StdOut = limitedStdout.Buffer.String()
 	taskCtx.result.StdErr = limitedStderr.Buffer.String()

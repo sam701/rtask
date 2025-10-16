@@ -7,13 +7,6 @@ import (
 	"strings"
 )
 
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
-}
-
 // OutputCollector wraps an io.Writer and limits the number of bytes written to it.
 // Once the limit is reached, subsequent writes are discarded (no-op).
 type OutputCollector struct {
