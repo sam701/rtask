@@ -1,5 +1,7 @@
 # RTask
 
+[![Tests](https://github.com/sam701/rtask/actions/workflows/test.yml/badge.svg)](https://github.com/sam701/rtask/actions/workflows/test.yml)
+
 RTask is a secure task runner with API key management that exposes system commands as HTTP endpoints. It provides authenticated access to configured tasks with rate limiting, metrics collection, and secure API key management.
 
 ## Features
@@ -15,7 +17,7 @@ RTask is a secure task runner with API key management that exposes system comman
 
 ### Prerequisites
 
-- Go 1.24.3 or later
+- Go 1.25 or later
 - Optional: [just](https://github.com/casey/just) for build automation
 
 ### Build from Source
@@ -214,6 +216,26 @@ Available metrics:
 - `500 Internal Server Error`: Task execution failed
 
 ## Development
+
+### Running Tests
+
+Run all tests:
+
+```bash
+go test -v
+```
+
+Run specific test:
+
+```bash
+go test -v -run TestSyncTask_Success
+```
+
+Run tests with timeout:
+
+```bash
+go test -v -timeout 3m
+```
 
 ### Running in Debug Mode
 

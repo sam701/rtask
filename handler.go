@@ -300,6 +300,9 @@ func (tm *TaskManager) runTask(taskCtx *taskContext) {
 				taskCtx.result.ExitCode = waitStatus.ExitStatus()
 			}
 		}
+	} else {
+		// Success case
+		taskCtx.result.ExitCode = 0
 	}
 	taskCtx.result.Status = status
 
