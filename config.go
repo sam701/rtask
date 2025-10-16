@@ -30,8 +30,9 @@ type Task struct {
 	// where the <name> is in uppercase and all disallowed characters are replaced by underscores.
 	PassRequestHeaders []string
 
-	// If true, the handler will pipe stdout and stderr to the response body
-	Blocking bool
+	// If true, return task ID immediately and run in background.
+	// If false, wait for completion and return result.
+	Async bool
 
 	MaxInputBytes  int64
 	MaxOutputBytes int64

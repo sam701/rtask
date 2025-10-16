@@ -188,16 +188,16 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	if tm.taskSemaphore != nil {
 		select {
 		case tm.taskSemaphore <- struct{}{}:
-			ctx.logger.Debug("semaphore acquired", "blocking", tm.config.Blocking)
+			tm.logger.Debug("semaphore acquired", "async", tm.config.Async)
 
 			defer func() {
-				if tm.config.Blocking {
+				if !tm.config.Async {
 					<-tm.taskSemaphore
-					ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking)
+					tm.logger.Debug("semaphore released", "async", tm.config.Async)
 				} else {
 					if err != nil {
 						<-tm.taskSemaphore
-						ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err)
+						tm.logger.Debug("semaphore released", "async", tm.config.Async, "error", err)
 					}
 				}
 			}()
@@ -208,12 +208,8 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// == async / blocking
-	if tm.config.Blocking {
-		tm.runTask(ctx)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ctx.result)
-	} else {
+	// == async / synchronous
+	if tm.config.Async {
 		var bb []byte
 		bb, err = io.ReadAll(ctx.stdin)
 		if err != nil {
@@ -229,7 +225,7 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			// Release semaphore
 			defer func() {
 				<-tm.taskSemaphore
-				ctx.logger.Debug("semaphore released", "blocking", tm.config.Blocking, "error", err, "goroutine", true)
+				tm.logger.Debug("semaphore released", "async", tm.config.Async, "error", err, "goroutine", true)
 			}()
 
 			// Register task ID
@@ -247,6 +243,11 @@ func (tm *TaskManager) handleRunTask(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"task_id": ctx.taskID})
+	} else {
+		// Synchronous execution
+		tm.runTask(ctx)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ctx.result)
 	}
 }
 

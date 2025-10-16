@@ -42,21 +42,21 @@ RTask uses TOML configuration files to define tasks and API key settings.
 [tasks.hello]
 command = ["./test.nu"]
 apiKeyNames = ["a1", "a3"]
-blocking = true
+async = false
 rateLimit = 1.0
 
 [tasks.build]
 command = ["make", "build"]
 workdir = "/path/to/project"
 apiKeyNames = ["github-action"]
-blocking = false
+async = true
 rateLimit = 0.5
 maxConcurrentTasks = 2
 executionTimeoutSeconds = 300
 
 [tasks.webhook-handler]
 command = ["/usr/local/bin/process-webhook.sh"]
-blocking = false
+async = true
 passRequestHeaders = ["X-GitHub-Event", "X-Hub-Signature"]
 
 [tasks.webhook-handler.webhookSecrets]
@@ -79,7 +79,7 @@ WEBHOOK_TIMEOUT = "30"
 - `webhookSecretFiles`: Map of user-friendly names to file paths containing webhook secret hashes
 - `environment`: Map of environment variables to pass to the task
 - `passRequestHeaders`: List of HTTP request headers to pass as environment variables (e.g., `X-Custom-Header` becomes `REQUEST_HEADER_X_CUSTOM_HEADER`)
-- `blocking`: If true, waits for task completion and returns result immediately; if false, returns task ID and runs asynchronously
+- `async`: If true, returns task ID immediately and runs in background; if false, waits for completion and returns result
 - `rateLimit`: Requests per second (default: 0 = unlimited)
 - `maxConcurrentTasks`: Maximum number of concurrent task executions (default: 0 = unlimited)
 - `maxInputBytes`: Maximum input size in bytes (default: 16KB)
@@ -111,9 +111,9 @@ This will output an API key that can be used to authenticate requests.
 
 ### Making Requests
 
-#### Blocking Tasks
+#### Synchronous Tasks
 
-For tasks configured with `blocking = true`, the response contains the execution result:
+For tasks configured with `async = false`, the response contains the execution result:
 
 ```bash
 curl -X POST \
@@ -132,7 +132,7 @@ curl -X POST \
 
 #### Async Tasks
 
-For tasks configured with `blocking = false`, you receive a task ID immediately:
+For tasks configured with `async = true`, you receive a task ID immediately:
 
 ```bash
 # Submit task
@@ -183,8 +183,8 @@ Available metrics:
 ### Task Execution
 
 - `POST /tasks/{task-name}`: Execute the specified task with API key authentication
-  - **Blocking mode**: Returns task execution result immediately
-  - **Async mode**: Returns `{"task_id": "..."}` immediately
+  - **Synchronous mode** (`async = false`): Returns task execution result immediately
+  - **Async mode** (`async = true`): Returns `{"task_id": "..."}` immediately
 - `GET /tasks/{task-name}/{task-id}`: Retrieve async task result by task ID
   - Returns `404` if task not found (never existed or cleaned up after retention period)
   - Task results are retained for a configurable period after completion (default: 20 seconds)
